@@ -26,7 +26,7 @@ pipeline {
         BASE_BRANCH = "${env.CHANGE_TARGET ?: 'main'}"
         
         // IBM specific settings
-        IBM_CONTRIBUTOR_EMAIL = "${env.CHANGE_AUTHOR_EMAIL ?: ''}"
+        IBM_CONTRIBUTOR_EMAIL = "${env.CHANGE_AUTHOR_EMAIL ?: 'karthikeyan.balakrishnan1@ibm.com'}"
     }
     
     parameters {
