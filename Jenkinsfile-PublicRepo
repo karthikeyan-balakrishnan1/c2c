@@ -542,10 +542,6 @@ Be EXTRA strict because this is going to a public repository."""
                     timeout=120,
                     env=bob_env
                 )
-                    text=True,
-                    timeout=120,
-                    env={**os.environ, 'PATH': f"/opt/homebrew/bin:{os.environ.get('PATH', '')}"}
-                )
         
         print(f"Bob Shell exit code: {result.returncode}")
         
