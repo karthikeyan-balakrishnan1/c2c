@@ -288,216 +288,216 @@ if __name__ == "__main__":
             }
         }
         
-//         stage('Bob Validation') {
-//             when {
-//                 expression { !params.SKIP_VALIDATION }
-//             }
-//             steps {
-//                 script {
-//                     echo "🤖 Running Bob Shell validation for public repository submission..."
+        stage('Bob Validation') {
+            when {
+                expression { !params.SKIP_VALIDATION }
+            }
+            steps {
+                script {
+                    echo "🤖 Running Bob Shell validation for public repository submission..."
                     
-//                     // Create enhanced validation script for public repos
-//                     writeFile file: "${VALIDATION_DIR}/validate_with_bob.py", text: '''#!/usr/bin/env python3
-// import json
-// import subprocess
-// import sys
-// import os
+                    // Create enhanced validation script for public repos
+                    writeFile file: "${VALIDATION_DIR}/validate_with_bob.py", text: '''#!/usr/bin/env python3
+import json
+import subprocess
+import sys
+import os
 
-// def validate_with_bob(pr_content_file):
-//     """Validate PR content using Bob Shell for public repo submission"""
+def validate_with_bob(pr_content_file):
+    """Validate PR content using Bob Shell for public repo submission"""
     
-//     # Read PR content
-//     with open(pr_content_file, 'r') as f:
-//         pr_content = json.load(f)
+    # Read PR content
+    with open(pr_content_file, 'r') as f:
+        pr_content = json.load(f)
     
-//     # Enhanced validation prompt for public repos
-//     prompt = f"""You are validating content from an IBM contributor that will be submitted to a PUBLIC external repository.
+    # Enhanced validation prompt for public repos
+    prompt = f"""You are validating content from an IBM contributor that will be submitted to a PUBLIC external repository.
 
-// This is CRITICAL because:
-// 1. The content will be publicly visible
-// 2. It represents IBM in the open source community
-// 3. Any issues will damage IBM's reputation
-// 4. The external repository owners have strict standards
+This is CRITICAL because:
+1. The content will be publicly visible
+2. It represents IBM in the open source community
+3. Any issues will damage IBM's reputation
+4. The external repository owners have strict standards
 
-// Please validate the following PR content for:
+Please validate the following PR content for:
 
-// CRITICAL CHECKS:
-// 1. Offensive language or unprofessional comments
-// 2. IBM confidential information (internal URLs, project codenames, credentials)
-// 3. Security vulnerabilities (exposed secrets, API keys, passwords, tokens)
-// 4. Compliance violations (export control, licensing issues)
-// 5. IBM-specific references that should be generic
-// 6. Internal IBM tools or processes mentioned
-// 7. Unprofessional tone or language
+CRITICAL CHECKS:
+1. Offensive language or unprofessional comments
+2. IBM confidential information (internal URLs, project codenames, credentials)
+3. Security vulnerabilities (exposed secrets, API keys, passwords, tokens)
+4. Compliance violations (export control, licensing issues)
+5. IBM-specific references that should be generic
+6. Internal IBM tools or processes mentioned
+7. Unprofessional tone or language
 
-// PR Content to Validate:
-// - Title: {pr_content.get('pr_title', '')}
-// - Body: {pr_content.get('pr_body', '')}
-// - Author: {pr_content.get('author', {}).get('name', 'Unknown')} ({pr_content.get('author', {}).get('email', 'Unknown')})
-// - IBM Contributor: {pr_content.get('author', {}).get('is_ibm', False)}
-// - Target: {pr_content.get('metadata', {}).get('public_repo', 'Unknown')}
-// - Commit Messages: {pr_content.get('commit_messages', '')}
-// - Changed Files: {', '.join(pr_content.get('changed_files', [])[:10])}
-// - Code Changes (first 2000 chars): {pr_content.get('code_changes', '')[:2000]}
+PR Content to Validate:
+- Title: {pr_content.get('pr_title', '')}
+- Body: {pr_content.get('pr_body', '')}
+- Author: {pr_content.get('author', {}).get('name', 'Unknown')} ({pr_content.get('author', {}).get('email', 'Unknown')})
+- IBM Contributor: {pr_content.get('author', {}).get('is_ibm', False)}
+- Target: {pr_content.get('metadata', {}).get('public_repo', 'Unknown')}
+- Commit Messages: {pr_content.get('commit_messages', '')}
+- Changed Files: {', '.join(pr_content.get('changed_files', [])[:10])}
+- Code Changes (first 2000 chars): {pr_content.get('code_changes', '')[:2000]}
 
-// Existing Warnings:
-// {chr(10).join('- ' + w for w in pr_content.get('warnings', []))}
+Existing Warnings:
+{chr(10).join('- ' + w for w in pr_content.get('warnings', []))}
 
-// Please respond in JSON format with:
-// {{
-//   "approved": true/false,
-//   "confidence": "HIGH/MEDIUM/LOW",
-//   "issues": [
-//     {{
-//       "type": "issue_type",
-//       "severity": "CRITICAL/HIGH/MEDIUM/LOW",
-//       "location": "where the issue was found",
-//       "message": "description of the issue",
-//       "suggestion": "how to fix it",
-//       "public_impact": "why this matters for public repo"
-//     }}
-//   ],
-//   "recommendations": [
-//     "additional recommendations for public submission"
-//   ]
-// }}
+Please respond in JSON format with:
+{{
+  "approved": true/false,
+  "confidence": "HIGH/MEDIUM/LOW",
+  "issues": [
+    {{
+      "type": "issue_type",
+      "severity": "CRITICAL/HIGH/MEDIUM/LOW",
+      "location": "where the issue was found",
+      "message": "description of the issue",
+      "suggestion": "how to fix it",
+      "public_impact": "why this matters for public repo"
+    }}
+  ],
+  "recommendations": [
+    "additional recommendations for public submission"
+  ]
+}}
 
-// Be EXTRA strict because this is going to a public repository."""
+Be EXTRA strict because this is going to a public repository."""
     
-//     print("🤖 Calling Bob Shell for public repo validation...")
-//     print(f"Prompt length: {len(prompt)} characters")
+    print("🤖 Calling Bob Shell for public repo validation...")
+    print(f"Prompt length: {len(prompt)} characters")
     
-//     try:
-//         # Call Bob Shell with positional prompt
-//         result = subprocess.run(
-//             [
-//                 'bob',
-//                 '--output-format', 'json',
-//                 '--chat-mode', 'code',
-//                 prompt
-//             ],
-//             capture_output=True,
-//             text=True,
-//             timeout=120
-//         )
+    try:
+        # Call Bob Shell with positional prompt
+        result = subprocess.run(
+            [
+                'bob',
+                '--output-format', 'json',
+                '--chat-mode', 'code',
+                prompt
+            ],
+            capture_output=True,
+            text=True,
+            timeout=120
+        )
         
-//         print(f"Bob Shell exit code: {result.returncode}")
+        print(f"Bob Shell exit code: {result.returncode}")
         
-//         if result.returncode == 0:
-//             # Try to parse JSON response
-//             try:
-//                 bob_response = json.loads(result.stdout)
+        if result.returncode == 0:
+            # Try to parse JSON response
+            try:
+                bob_response = json.loads(result.stdout)
                 
-//                 # Add metadata
-//                 bob_response['validation_type'] = 'public_repo'
-//                 bob_response['target_repo'] = pr_content.get('metadata', {}).get('public_repo', 'Unknown')
+                # Add metadata
+                bob_response['validation_type'] = 'public_repo'
+                bob_response['target_repo'] = pr_content.get('metadata', {}).get('public_repo', 'Unknown')
                 
-//                 return bob_response
-//             except json.JSONDecodeError:
-//                 print("⚠️  Bob response is not valid JSON, parsing text...")
-//                 import re
-//                 json_match = re.search(r'\\{[\\s\\S]*\\}', result.stdout)
-//                 if json_match:
-//                     try:
-//                         return json.loads(json_match.group())
-//                     except:
-//                         pass
+                return bob_response
+            except json.JSONDecodeError:
+                print("⚠️  Bob response is not valid JSON, parsing text...")
+                import re
+                json_match = re.search(r'\\{[\\s\\S]*\\}', result.stdout)
+                if json_match:
+                    try:
+                        return json.loads(json_match.group())
+                    except:
+                        pass
                 
-//                 # Fallback
-//                 approved = "approved" in result.stdout.lower() and "true" in result.stdout.lower()
-//                 return {
-//                     "approved": approved,
-//                     "confidence": "LOW",
-//                     "raw_response": result.stdout,
-//                     "note": "Response parsed from text output"
-//                 }
-//         else:
-//             print(f"❌ Bob Shell error: {result.stderr}")
-//             return {
-//                 "approved": False,
-//                 "confidence": "LOW",
-//                 "error": result.stderr,
-//                 "stdout": result.stdout
-//             }
+                # Fallback
+                approved = "approved" in result.stdout.lower() and "true" in result.stdout.lower()
+                return {
+                    "approved": approved,
+                    "confidence": "LOW",
+                    "raw_response": result.stdout,
+                    "note": "Response parsed from text output"
+                }
+        else:
+            print(f"❌ Bob Shell error: {result.stderr}")
+            return {
+                "approved": False,
+                "confidence": "LOW",
+                "error": result.stderr,
+                "stdout": result.stdout
+            }
     
-//     except subprocess.TimeoutExpired:
-//         print("❌ Bob Shell timeout")
-//         return {
-//             "approved": False,
-//             "confidence": "LOW",
-//             "error": "Timeout waiting for Bob response (120s)"
-//         }
+    except subprocess.TimeoutExpired:
+        print("❌ Bob Shell timeout")
+        return {
+            "approved": False,
+            "confidence": "LOW",
+            "error": "Timeout waiting for Bob response (120s)"
+        }
     
-//     except FileNotFoundError:
-//         print("❌ Bob Shell not found")
-//         return {
-//             "approved": False,
-//             "confidence": "LOW",
-//             "error": "Bob Shell executable not found"
-//         }
+    except FileNotFoundError:
+        print("❌ Bob Shell not found")
+        return {
+            "approved": False,
+            "confidence": "LOW",
+            "error": "Bob Shell executable not found"
+        }
     
-//     except Exception as e:
-//         print(f"❌ Unexpected error: {e}")
-//         return {
-//             "approved": False,
-//             "confidence": "LOW",
-//             "error": str(e)
-//         }
+    except Exception as e:
+        print(f"❌ Unexpected error: {e}")
+        return {
+            "approved": False,
+            "confidence": "LOW",
+            "error": str(e)
+        }
 
-// if __name__ == "__main__":
-//     pr_content_file = sys.argv[1] if len(sys.argv) > 1 else "pr_content.json"
+if __name__ == "__main__":
+    pr_content_file = sys.argv[1] if len(sys.argv) > 1 else "pr_content.json"
     
-//     print(f"📄 Validating for public repository: {pr_content_file}")
+    print(f"📄 Validating for public repository: {pr_content_file}")
     
-//     result = validate_with_bob(pr_content_file)
+    result = validate_with_bob(pr_content_file)
     
-//     # Save result
-//     with open("bob_validation_result.json", 'w') as f:
-//         json.dump(result, f, indent=2)
+    # Save result
+    with open("bob_validation_result.json", 'w') as f:
+        json.dump(result, f, indent=2)
     
-//     print("\\n" + "="*60)
-//     print("BOB VALIDATION RESULT (PUBLIC REPO)")
-//     print("="*60)
-//     print(json.dumps(result, indent=2))
-//     print("="*60)
+    print("\\n" + "="*60)
+    print("BOB VALIDATION RESULT (PUBLIC REPO)")
+    print("="*60)
+    print(json.dumps(result, indent=2))
+    print("="*60)
     
-//     # Exit with appropriate code
-//     sys.exit(0 if result.get("approved", False) else 1)
-// '''
+    # Exit with appropriate code
+    sys.exit(0 if result.get("approved", False) else 1)
+'''
                     
-//                     // Run Bob validation
-//                     def validationResult = sh(
-//                         script: """
-//                             cd ${VALIDATION_DIR}
-//                             chmod +x validate_with_bob.py
-//                             python3 validate_with_bob.py pr_content.json
-//                         """,
-//                         returnStatus: true
-//                     )
+                    // Run Bob validation
+                    def validationResult = sh(
+                        script: """
+                            cd ${VALIDATION_DIR}
+                            chmod +x validate_with_bob.py
+                            python3 validate_with_bob.py pr_content.json
+                        """,
+                        returnStatus: true
+                    )
                     
-//                     // Read validation results
-//                     def resultsFile = "${VALIDATION_DIR}/bob_validation_result.json"
-//                     if (fileExists(resultsFile)) {
-//                         def results = readJSON file: resultsFile
+                    // Read validation results
+                    def resultsFile = "${VALIDATION_DIR}/bob_validation_result.json"
+                    if (fileExists(resultsFile)) {
+                        def results = readJSON file: resultsFile
                         
-//                         // Store results in environment
-//                         env.BOB_APPROVED = results.approved.toString()
-//                         env.BOB_CONFIDENCE = results.confidence ?: 'UNKNOWN'
-//                         env.BOB_VALIDATION_RESULT = resultsFile
+                        // Store results in environment
+                        env.BOB_APPROVED = results.approved.toString()
+                        env.BOB_CONFIDENCE = results.confidence ?: 'UNKNOWN'
+                        env.BOB_VALIDATION_RESULT = resultsFile
                         
-//                         if (validationResult != 0 || !results.approved) {
-//                             currentBuild.result = 'FAILURE'
-//                             error("❌ Bob validation failed for public repository submission. See validation results for details.")
-//                         } else {
-//                             echo "✅ Bob validation passed! Content is safe for public repository."
-//                             echo "   Confidence: ${env.BOB_CONFIDENCE}"
-//                         }
-//                     } else {
-//                         error("❌ Validation result file not found")
-//                     }
-//                 }
-//             }
-//         }
+                        if (validationResult != 0 || !results.approved) {
+                            currentBuild.result = 'FAILURE'
+                            error("❌ Bob validation failed for public repository submission. See validation results for details.")
+                        } else {
+                            echo "✅ Bob validation passed! Content is safe for public repository."
+                            echo "   Confidence: ${env.BOB_CONFIDENCE}"
+                        }
+                    } else {
+                        error("❌ Validation result file not found")
+                    }
+                }
+            }
+        }
         
 //         stage('Post Results to IBM Fork PR') {
 //             when {
@@ -858,3 +858,5 @@ def generateHTMLReportForPublicRepo(results, prContent) {
 </body>
 </html>"""
 }
+// Go to hell
+// This process is waste of time
