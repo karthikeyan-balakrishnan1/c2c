@@ -613,7 +613,7 @@ This contribution has been validated for:
                     
                     def results = readJSON file: "${VALIDATION_DIR}/bob_validation_result.json"
                     def prContent = readJSON file: "${VALIDATION_DIR}/pr_content.json"
-                    def htmlReport = generateHTMLReportForPublicRepo(results, prContent)
+                    // def htmlReport = generateHTMLReportForPublicRepo(results, prContent)
                     
                     writeFile file: "${VALIDATION_DIR}/validation_report.html", text: htmlReport
                     
