@@ -1,0 +1,860 @@
+// Jenkinsfile for Public Repository - Bob Validation Pipeline
+// Special configuration for IBM contributors to external/public repositories
+
+pipeline {
+    agent any
+    
+    environment {
+        // GitHub credentials for public repo
+        GITHUB_TOKEN = credentials('github-token')
+        
+        // IBM Fork repository (where validation happens)
+        IBM_FORK_REPO = "${params.IBM_FORK_REPO ?: 'karthikeyan-balakrishnan-ibm/c2c'}"
+        
+        // External/Public repository (final destination)
+        PUBLIC_REPO = "${params.PUBLIC_REPO ?: 'IBM/c2c'}"
+        
+        // Bob Shell configuration
+        BOB_SHELL_PATH = '/usr/local/bin/bob'
+        
+        // Working directories
+        WORKSPACE_DIR = "${WORKSPACE}"
+        VALIDATION_DIR = "${WORKSPACE}/bob-validation"
+        
+        // Git configuration
+        GIT_BRANCH = "${env.CHANGE_BRANCH ?: env.GIT_BRANCH}"
+        BASE_BRANCH = "${env.CHANGE_TARGET ?: 'main'}"
+        
+        // IBM specific settings
+        IBM_CONTRIBUTOR_EMAIL = "${env.CHANGE_AUTHOR_EMAIL ?: ''}"
+    }
+    
+    parameters {
+        string(
+            name: 'IBM_FORK_REPO',
+            defaultValue: 'karthikeyan-balakrishnan-ibm/c2c',
+            description: 'IBM fork repository (format: org/repo)'
+        )
+        string(
+            name: 'PUBLIC_REPO',
+            defaultValue: 'IBM/c2c',
+            description: 'Public/external repository (format: org/repo)'
+        )
+        booleanParam(
+            name: 'SKIP_VALIDATION',
+            defaultValue: false,
+            description: 'Skip Bob validation (emergency only - requires approval)'
+        )
+        booleanParam(
+            name: 'AUTO_CREATE_PR',
+            defaultValue: true,
+            description: 'Automatically create PR to public repo after validation passes'
+        )
+        booleanParam(
+            name: 'DEBUG_MODE',
+            defaultValue: false,
+            description: 'Enable debug output'
+        )
+    }
+    
+    options {
+        buildDiscarder(logRotator(daysToKeepStr: '30', numToKeepStr: '50'))
+        timeout(time: 20, unit: 'MINUTES')
+        disableConcurrentBuilds()
+        timestamps()
+    }
+    
+    stages {
+        stage('Initialize') {
+            steps {
+                script {
+                    echo "🚀 Starting Bob Validation Pipeline for Public Repository"
+                    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                    echo "📋 Build Information:"
+                    echo "   Job: ${env.JOB_NAME}"
+                    echo "   Build: #${env.BUILD_NUMBER}"
+                    echo "   IBM Fork: ${IBM_FORK_REPO}"
+                    echo "   Public Repo: ${PUBLIC_REPO}"
+                    echo "   Branch: ${GIT_BRANCH}"
+                    echo "   Base Branch: ${BASE_BRANCH}"
+                    echo "   PR: ${env.CHANGE_ID ?: 'N/A'}"
+                    echo "   IBM Contributor: ${env.CHANGE_AUTHOR ?: 'N/A'}"
+                    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                    
+                    // Verify this is an IBM contributor
+                    if (IBM_CONTRIBUTOR_EMAIL && !IBM_CONTRIBUTOR_EMAIL.contains('@ibm.com')) {
+                        echo "⚠️  Warning: Contributor email is not @ibm.com"
+                        echo "   This pipeline is designed for IBM contributors only"
+                    }
+                    
+                    // Create validation directory
+                    sh """
+                        mkdir -p ${VALIDATION_DIR}
+                        echo "✅ Validation directory created: ${VALIDATION_DIR}"
+                    """
+                }
+            }
+        }
+        
+        stage('Checkout IBM Fork') {
+            steps {
+                script {
+                    echo "📥 Checking out IBM fork repository..."
+                    
+                    // Checkout from IBM fork (not public repo)
+                    checkout([
+                        $class: 'GitSCM',
+                        branches: [[name: "*/${GIT_BRANCH}"]],
+                        userRemoteConfigs: [[
+                            url: "https://github.com/${IBM_FORK_REPO}.git",
+                            credentialsId: 'github-token'
+                        ]]
+                    ])
+                    
+                    // Add public repo as remote for reference
+                    sh """
+                        git remote add public https://github.com/${PUBLIC_REPO}.git || true
+                        git fetch --all --prune
+                        git branch -a
+                        echo "✅ IBM fork checked out successfully"
+                    """
+                }
+            }
+        }
+        
+        stage('Verify IBM Fork Sync') {
+            steps {
+                script {
+                    echo "🔄 Verifying IBM fork is synced with public repo..."
+                    
+                    sh """
+                        # Fetch latest from public repo
+                        git fetch public ${BASE_BRANCH}
+                        
+                        # Check if fork is behind
+                        BEHIND=\$(git rev-list --count HEAD..public/${BASE_BRANCH})
+                        
+                        if [ "\$BEHIND" -gt 0 ]; then
+                            echo "⚠️  IBM fork is \$BEHIND commits behind public repo"
+                            echo "   Consider syncing the fork before proceeding"
+                        else
+                            echo "✅ IBM fork is up to date with public repo"
+                        fi
+                    """
+                }
+            }
+        }
+        
+        stage('Collect PR Content') {
+            steps {
+                script {
+                    echo "📦 Collecting PR content for validation..."
+                    
+                    // Create enhanced collection script for public repos
+                    writeFile file: "${VALIDATION_DIR}/collect_pr_content.py", text: '''#!/usr/bin/env python3
+import json
+import subprocess
+import sys
+import os
+
+def run_git_command(cmd):
+    """Run git command and return output"""
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            check=True,
+            shell=True
+        )
+        return result.stdout.strip()
+    except subprocess.CalledProcessError as e:
+        print(f"Error running command: {cmd}")
+        print(f"Error: {e.stderr}")
+        return ""
+
+def collect_pr_content(base_branch):
+    """Collect all PR content for public repo submission"""
+    print(f"Collecting PR content (base: {base_branch})...")
+    
+    # Get PR title from commit or environment
+    pr_title = os.getenv('CHANGE_TITLE', run_git_command("git log -1 --pretty=format:'%s'"))
+    
+    # Get PR body/description
+    pr_body = os.getenv('CHANGE_DESCRIPTION', run_git_command("git log -1 --pretty=format:'%b'"))
+    
+    # Get code changes (diff against public repo)
+    print("Getting code diff against public repo...")
+    code_changes = run_git_command(f"git diff public/{base_branch}..HEAD")
+    
+    if not code_changes:
+        print("No diff found against public repo, trying IBM fork...")
+        code_changes = run_git_command(f"git diff origin/{base_branch}..HEAD")
+    
+    # Get commit messages
+    print("Getting commit messages...")
+    commit_messages = run_git_command(
+        f"git log public/{base_branch}..HEAD --pretty=format:'%s%n%b' || git log origin/{base_branch}..HEAD --pretty=format:'%s%n%b'"
+    )
+    
+    # Get changed files
+    print("Getting changed files...")
+    changed_files = run_git_command(
+        f"git diff --name-only public/{base_branch}..HEAD || git diff --name-only origin/{base_branch}..HEAD"
+    )
+    
+    # Get author information
+    author_name = run_git_command("git log -1 --pretty=format:'%an'")
+    author_email = run_git_command("git log -1 --pretty=format:'%ae'")
+    
+    # Check for IBM-specific patterns that should be removed
+    ibm_patterns_found = []
+    
+    # Check for IBM internal URLs
+    if '.ibm.com' in code_changes or '.ibm.com' in commit_messages:
+        ibm_patterns_found.append("IBM internal URLs detected")
+    
+    # Check for IBM project names (common ones)
+    ibm_projects = ['watson', 'bluemix', 'softlayer', 'cloud-pak']
+    for project in ibm_projects:
+        if project.lower() in code_changes.lower() or project.lower() in commit_messages.lower():
+            ibm_patterns_found.append(f"IBM project reference: {project}")
+    
+    # Compile PR content
+    pr_content = {
+        "pr_title": pr_title,
+        "pr_body": pr_body,
+        "code_changes": code_changes[:10000],  # Limit size
+        "commit_messages": commit_messages,
+        "changed_files": changed_files.split('\\n') if changed_files else [],
+        "author": {
+            "name": author_name,
+            "email": author_email,
+            "is_ibm": '@ibm.com' in author_email.lower()
+        },
+        "metadata": {
+            "branch": os.getenv('GIT_BRANCH', 'unknown'),
+            "base_branch": base_branch,
+            "commit": os.getenv('GIT_COMMIT', 'unknown'),
+            "pr_number": os.getenv('CHANGE_ID', 'N/A'),
+            "ibm_fork": os.getenv('IBM_FORK_REPO', 'unknown'),
+            "public_repo": os.getenv('PUBLIC_REPO', 'unknown')
+        },
+        "warnings": ibm_patterns_found
+    }
+    
+    print(f"✅ Collected PR content:")
+    print(f"   - Title: {pr_title}")
+    print(f"   - Author: {author_name} <{author_email}>")
+    print(f"   - IBM Contributor: {'Yes' if pr_content['author']['is_ibm'] else 'No'}")
+    print(f"   - Code changes: {len(code_changes)} chars")
+    print(f"   - Commit messages: {len(commit_messages)} chars")
+    print(f"   - Changed files: {len(pr_content['changed_files'])}")
+    if ibm_patterns_found:
+        print(f"   - ⚠️  Warnings: {len(ibm_patterns_found)}")
+        for warning in ibm_patterns_found:
+            print(f"      - {warning}")
+    
+    return pr_content
+
+if __name__ == "__main__":
+    base_branch = sys.argv[1] if len(sys.argv) > 1 else "main"
+    
+    pr_content = collect_pr_content(base_branch)
+    
+    # Save to file
+    output_file = "pr_content.json"
+    with open(output_file, 'w') as f:
+        json.dump(pr_content, f, indent=2)
+    
+    print(f"\\n💾 PR content saved to: {output_file}")
+'''
+                    
+                    // Run the collection script
+                    sh """
+                        cd ${VALIDATION_DIR}
+                        chmod +x collect_pr_content.py
+                        python3 collect_pr_content.py "${BASE_BRANCH}"
+                    """
+                    
+                    // Verify the file was created
+                    def prContentExists = fileExists("${VALIDATION_DIR}/pr_content.json")
+                    if (!prContentExists) {
+                        error("❌ Failed to collect PR content")
+                    }
+                    
+                    echo "✅ PR content collected successfully"
+                }
+            }
+        }
+        
+        stage('Bob Validation') {
+            when {
+                expression { !params.SKIP_VALIDATION }
+            }
+            steps {
+                script {
+                    echo "🤖 Running Bob Shell validation for public repository submission..."
+                    
+                    // Create enhanced validation script for public repos
+                    writeFile file: "${VALIDATION_DIR}/validate_with_bob.py", text: '''#!/usr/bin/env python3
+import json
+import subprocess
+import sys
+import os
+
+def validate_with_bob(pr_content_file):
+    """Validate PR content using Bob Shell for public repo submission"""
+    
+    # Read PR content
+    with open(pr_content_file, 'r') as f:
+        pr_content = json.load(f)
+    
+    # Enhanced validation prompt for public repos
+    prompt = f"""You are validating content from an IBM contributor that will be submitted to a PUBLIC external repository.
+
+This is CRITICAL because:
+1. The content will be publicly visible
+2. It represents IBM in the open source community
+3. Any issues will damage IBM's reputation
+4. The external repository owners have strict standards
+
+Please validate the following PR content for:
+
+CRITICAL CHECKS:
+1. Offensive language or unprofessional comments
+2. IBM confidential information (internal URLs, project codenames, credentials)
+3. Security vulnerabilities (exposed secrets, API keys, passwords, tokens)
+4. Compliance violations (export control, licensing issues)
+5. IBM-specific references that should be generic
+6. Internal IBM tools or processes mentioned
+7. Unprofessional tone or language
+
+PR Content to Validate:
+- Title: {pr_content.get('pr_title', '')}
+- Body: {pr_content.get('pr_body', '')}
+- Author: {pr_content.get('author', {}).get('name', 'Unknown')} ({pr_content.get('author', {}).get('email', 'Unknown')})
+- IBM Contributor: {pr_content.get('author', {}).get('is_ibm', False)}
+- Target: {pr_content.get('metadata', {}).get('public_repo', 'Unknown')}
+- Commit Messages: {pr_content.get('commit_messages', '')}
+- Changed Files: {', '.join(pr_content.get('changed_files', [])[:10])}
+- Code Changes (first 2000 chars): {pr_content.get('code_changes', '')[:2000]}
+
+Existing Warnings:
+{chr(10).join('- ' + w for w in pr_content.get('warnings', []))}
+
+Please respond in JSON format with:
+{{
+  "approved": true/false,
+  "confidence": "HIGH/MEDIUM/LOW",
+  "issues": [
+    {{
+      "type": "issue_type",
+      "severity": "CRITICAL/HIGH/MEDIUM/LOW",
+      "location": "where the issue was found",
+      "message": "description of the issue",
+      "suggestion": "how to fix it",
+      "public_impact": "why this matters for public repo"
+    }}
+  ],
+  "recommendations": [
+    "additional recommendations for public submission"
+  ]
+}}
+
+Be EXTRA strict because this is going to a public repository."""
+    
+    print("🤖 Calling Bob Shell for public repo validation...")
+    print(f"Prompt length: {len(prompt)} characters")
+    
+    try:
+        # Call Bob Shell with positional prompt
+        result = subprocess.run(
+            [
+                'bob',
+                '--output-format', 'json',
+                '--chat-mode', 'code',
+                prompt
+            ],
+            capture_output=True,
+            text=True,
+            timeout=120
+        )
+        
+        print(f"Bob Shell exit code: {result.returncode}")
+        
+        if result.returncode == 0:
+            # Try to parse JSON response
+            try:
+                bob_response = json.loads(result.stdout)
+                
+                # Add metadata
+                bob_response['validation_type'] = 'public_repo'
+                bob_response['target_repo'] = pr_content.get('metadata', {}).get('public_repo', 'Unknown')
+                
+                return bob_response
+            except json.JSONDecodeError:
+                print("⚠️  Bob response is not valid JSON, parsing text...")
+                import re
+                json_match = re.search(r'\\{[\\s\\S]*\\}', result.stdout)
+                if json_match:
+                    try:
+                        return json.loads(json_match.group())
+                    except:
+                        pass
+                
+                # Fallback
+                approved = "approved" in result.stdout.lower() and "true" in result.stdout.lower()
+                return {
+                    "approved": approved,
+                    "confidence": "LOW",
+                    "raw_response": result.stdout,
+                    "note": "Response parsed from text output"
+                }
+        else:
+            print(f"❌ Bob Shell error: {result.stderr}")
+            return {
+                "approved": False,
+                "confidence": "LOW",
+                "error": result.stderr,
+                "stdout": result.stdout
+            }
+    
+    except subprocess.TimeoutExpired:
+        print("❌ Bob Shell timeout")
+        return {
+            "approved": False,
+            "confidence": "LOW",
+            "error": "Timeout waiting for Bob response (120s)"
+        }
+    
+    except FileNotFoundError:
+        print("❌ Bob Shell not found")
+        return {
+            "approved": False,
+            "confidence": "LOW",
+            "error": "Bob Shell executable not found"
+        }
+    
+    except Exception as e:
+        print(f"❌ Unexpected error: {e}")
+        return {
+            "approved": False,
+            "confidence": "LOW",
+            "error": str(e)
+        }
+
+if __name__ == "__main__":
+    pr_content_file = sys.argv[1] if len(sys.argv) > 1 else "pr_content.json"
+    
+    print(f"📄 Validating for public repository: {pr_content_file}")
+    
+    result = validate_with_bob(pr_content_file)
+    
+    # Save result
+    with open("bob_validation_result.json", 'w') as f:
+        json.dump(result, f, indent=2)
+    
+    print("\\n" + "="*60)
+    print("BOB VALIDATION RESULT (PUBLIC REPO)")
+    print("="*60)
+    print(json.dumps(result, indent=2))
+    print("="*60)
+    
+    # Exit with appropriate code
+    sys.exit(0 if result.get("approved", False) else 1)
+'''
+                    
+                    // Run Bob validation
+                    def validationResult = sh(
+                        script: """
+                            cd ${VALIDATION_DIR}
+                            chmod +x validate_with_bob.py
+                            python3 validate_with_bob.py pr_content.json
+                        """,
+                        returnStatus: true
+                    )
+                    
+                    // Read validation results
+                    def resultsFile = "${VALIDATION_DIR}/bob_validation_result.json"
+                    if (fileExists(resultsFile)) {
+                        def results = readJSON file: resultsFile
+                        
+                        // Store results in environment
+                        env.BOB_APPROVED = results.approved.toString()
+                        env.BOB_CONFIDENCE = results.confidence ?: 'UNKNOWN'
+                        env.BOB_VALIDATION_RESULT = resultsFile
+                        
+                        if (validationResult != 0 || !results.approved) {
+                            currentBuild.result = 'FAILURE'
+                            error("❌ Bob validation failed for public repository submission. See validation results for details.")
+                        } else {
+                            echo "✅ Bob validation passed! Content is safe for public repository."
+                            echo "   Confidence: ${env.BOB_CONFIDENCE}"
+                        }
+                    } else {
+                        error("❌ Validation result file not found")
+                    }
+                }
+            }
+        }
+        
+        stage('Post Results to IBM Fork PR') {
+            when {
+                expression { env.CHANGE_ID != null }
+            }
+            steps {
+                script {
+                    echo "📝 Posting validation results to IBM fork PR..."
+                    
+                    def results = readJSON file: "${VALIDATION_DIR}/bob_validation_result.json"
+                    def comment = generateGitHubCommentForPublicRepo(results)
+                    
+                    // Post comment to IBM fork PR
+                    sh """
+                        curl -X POST \
+                            -H "Authorization: token ${GITHUB_TOKEN}" \
+                            -H "Content-Type: application/json" \
+                            -H "Accept: application/vnd.github.v3+json" \
+                            -d '{"body": ${groovy.json.JsonOutput.toJson(comment)}}' \
+                            "https://api.github.com/repos/${IBM_FORK_REPO}/issues/${env.CHANGE_ID}/comments"
+                    """
+                    
+                    echo "✅ Results posted to IBM fork PR #${env.CHANGE_ID}"
+                }
+            }
+        }
+        
+        stage('Create PR to Public Repo') {
+            when {
+                allOf {
+                    expression { env.BOB_APPROVED == 'true' }
+                    expression { params.AUTO_CREATE_PR }
+                }
+            }
+            steps {
+                script {
+                    echo "🚀 Creating PR to public repository..."
+                    
+                    def prContent = readJSON file: "${VALIDATION_DIR}/pr_content.json"
+                    
+                    // Create PR to public repo
+                    def prBody = """${prContent.pr_body}
+
+---
+
+**IBM Contributor Information:**
+- Validated by: Bob AI Content Validation System
+- IBM Fork: ${IBM_FORK_REPO}
+- Validation Build: [Jenkins #${env.BUILD_NUMBER}](${env.BUILD_URL})
+
+This contribution has been validated for:
+✅ Content appropriateness
+✅ No confidential information
+✅ Security best practices
+✅ Compliance requirements
+"""
+                    
+                    def prData = [
+                        title: prContent.pr_title,
+                        body: prBody,
+                        head: "${IBM_FORK_REPO.split('/')[0]}:${GIT_BRANCH}",
+                        base: BASE_BRANCH
+                    ]
+                    
+                    writeJSON file: "${VALIDATION_DIR}/pr_data.json", json: prData
+                    
+                    def createPrResult = sh(
+                        script: """
+                            curl -X POST \
+                                -H "Authorization: token ${GITHUB_TOKEN}" \
+                                -H "Content-Type: application/json" \
+                                -H "Accept: application/vnd.github.v3+json" \
+                                -d @${VALIDATION_DIR}/pr_data.json \
+                                "https://api.github.com/repos/${PUBLIC_REPO}/pulls" \
+                                > ${VALIDATION_DIR}/public_pr_response.json
+                            
+                            cat ${VALIDATION_DIR}/public_pr_response.json
+                        """,
+                        returnStdout: true
+                    )
+                    
+                    def prResponse = readJSON file: "${VALIDATION_DIR}/public_pr_response.json"
+                    
+                    if (prResponse.number) {
+                        env.PUBLIC_PR_NUMBER = prResponse.number.toString()
+                        env.PUBLIC_PR_URL = prResponse.html_url
+                        
+                        echo "✅ PR created successfully!"
+                        echo "   PR #${env.PUBLIC_PR_NUMBER}: ${env.PUBLIC_PR_URL}"
+                        
+                        // Post link back to IBM fork PR
+                        if (env.CHANGE_ID) {
+                            sh """
+                                curl -X POST \
+                                    -H "Authorization: token ${GITHUB_TOKEN}" \
+                                    -H "Content-Type: application/json" \
+                                    -d '{"body": "✅ PR created to public repository: ${env.PUBLIC_PR_URL}"}' \
+                                    "https://api.github.com/repos/${IBM_FORK_REPO}/issues/${env.CHANGE_ID}/comments"
+                            """
+                        }
+                    } else {
+                        echo "⚠️  Failed to create PR to public repo"
+                        echo "   Response: ${createPrResult}"
+                    }
+                }
+            }
+        }
+        
+        stage('Generate Report') {
+            steps {
+                script {
+                    echo "📊 Generating validation report..."
+                    
+                    def results = readJSON file: "${VALIDATION_DIR}/bob_validation_result.json"
+                    def prContent = readJSON file: "${VALIDATION_DIR}/pr_content.json"
+                    def htmlReport = generateHTMLReportForPublicRepo(results, prContent)
+                    
+                    writeFile file: "${VALIDATION_DIR}/validation_report.html", text: htmlReport
+                    
+                    echo "✅ Report generated"
+                }
+            }
+        }
+    }
+    
+    post {
+        always {
+            script {
+                echo "🧹 Cleaning up and archiving artifacts..."
+                
+                archiveArtifacts artifacts: 'bob-validation/**/*', allowEmptyArchive: true
+                
+                publishHTML([
+                    reportDir: 'bob-validation',
+                    reportFiles: 'validation_report.html',
+                    reportName: 'Bob Validation Report (Public Repo)',
+                    keepAll: true,
+                    alwaysLinkToLastBuild: true
+                ])
+            }
+        }
+        
+        success {
+            script {
+                echo "✅ Pipeline completed successfully!"
+                
+                if (env.CHANGE_ID) {
+                    sh """
+                        curl -X POST \
+                            -H "Authorization: token ${GITHUB_TOKEN}" \
+                            -H "Content-Type: application/json" \
+                            -d '{"state": "success", "context": "Bob Validation (Public Repo)", "description": "Content validated for public submission"}' \
+                            "https://api.github.com/repos/${IBM_FORK_REPO}/statuses/${env.GIT_COMMIT}"
+                    """
+                }
+                
+                if (env.PUBLIC_PR_URL) {
+                    echo "🎉 Public PR created: ${env.PUBLIC_PR_URL}"
+                }
+            }
+        }
+        
+        failure {
+            script {
+                echo "❌ Pipeline failed!"
+                
+                if (env.CHANGE_ID) {
+                    sh """
+                        curl -X POST \
+                            -H "Authorization: token ${GITHUB_TOKEN}" \
+                            -H "Content-Type: application/json" \
+                            -d '{"state": "failure", "context": "Bob Validation (Public Repo)", "description": "Content validation failed - not safe for public submission"}' \
+                            "https://api.github.com/repos/${IBM_FORK_REPO}/statuses/${env.GIT_COMMIT}"
+                    """
+                }
+                
+                emailext(
+                    subject: "⚠️  Bob Validation Failed for Public Repo: ${env.JOB_NAME} #${env.BUILD_NUMBER}",
+                    body: """
+                        Bob content validation has FAILED for public repository submission.
+                        
+                        This is CRITICAL because the content was intended for a public repository.
+                        
+                        Job: ${env.JOB_NAME}
+                        Build: ${env.BUILD_NUMBER}
+                        IBM Fork PR: #${env.CHANGE_ID ?: 'N/A'}
+                        Target Public Repo: ${PUBLIC_REPO}
+                        Branch: ${GIT_BRANCH}
+                        
+                        ⚠️  DO NOT submit this content to the public repository until issues are resolved.
+                        
+                        Review the validation results:
+                        ${env.BUILD_URL}Bob_20Validation_20Report_20_28Public_20Repo_29/
+                        
+                        Build Console: ${env.BUILD_URL}console
+                        
+                        Contact DevOps team if you need assistance.
+                    """,
+                    to: "${env.CHANGE_AUTHOR_EMAIL ?: 'karthikeyan.balakrishnan1@ibm.com'}"
+                )
+            }
+        }
+    }
+}
+
+// Helper function for public repo GitHub comment
+def generateGitHubCommentForPublicRepo(results) {
+    if (results.approved) {
+        return """## ✅ Bob AI Content Validation: APPROVED for Public Repository
+
+All content has been validated and is **SAFE for public repository submission**.
+
+**Validation Confidence:** ${results.confidence ?: 'HIGH'}
+
+**Target Repository:** ${PUBLIC_REPO}
+
+**Validation Details:**
+- ✓ Offensive language: Clean
+- ✓ IBM confidential information: None detected
+- ✓ Security vulnerabilities: None found
+- ✓ Compliance: Compliant
+- ✓ Professional standards: Met
+
+${results.recommendations && results.recommendations.size() > 0 ? "**Recommendations:**\n" + results.recommendations.collect { "- ${it}" }.join('\n') : ""}
+
+**Next Steps:**
+${params.AUTO_CREATE_PR ? "- ✅ PR will be automatically created to public repository" : "- Manual PR creation required to public repository"}
+- Review the PR in the public repository
+- Respond to any feedback from public repo maintainers
+
+**Build Information:**
+- Jenkins Build: [#${env.BUILD_NUMBER}](${env.BUILD_URL})
+- Validation Report: [View Report](${env.BUILD_URL}Bob_20Validation_20Report_20_28Public_20Repo_29/)
+
+---
+*Automated validation by Bob AI for public repository submission*"""
+    } else {
+        def issuesText = ""
+        if (results.issues && results.issues.size() > 0) {
+            issuesText = results.issues.collect { issue ->
+                """### ${issue.severity ?: 'MEDIUM'}: ${issue.type ?: 'Unknown'}
+
+**Location:** ${issue.location ?: 'N/A'}
+**Message:** ${issue.message ?: 'N/A'}
+${issue.suggestion ? "**Suggestion:** ${issue.suggestion}" : ""}
+${issue.public_impact ? "**Public Impact:** ${issue.public_impact}" : ""}"""
+            }.join('\n\n---\n\n')
+        } else if (results.error) {
+            issuesText = "**Error:** ${results.error}"
+        }
+        
+        return """## ❌ Bob AI Content Validation: REJECTED for Public Repository
+
+⚠️  **CRITICAL: This content is NOT safe for public repository submission.**
+
+**Validation Confidence:** ${results.confidence ?: 'HIGH'}
+
+**Target Repository:** ${PUBLIC_REPO}
+
+**Issues Detected:**
+
+${issuesText}
+
+**⚠️  IMPORTANT:**
+- DO NOT create a PR to the public repository until these issues are resolved
+- Fix all issues in the IBM fork first
+- Re-run validation after fixes
+- Only submit to public repo after validation passes
+
+**Build Information:**
+- Jenkins Build: [#${env.BUILD_NUMBER}](${env.BUILD_URL})
+- Validation Report: [View Report](${env.BUILD_URL}Bob_20Validation_20Report_20_28Public_20Repo_29/)
+- Console Output: [View Logs](${env.BUILD_URL}console)
+
+**Need Help?**
+- Contact DevOps team
+- Review IBM's open source contribution guidelines
+- Check the validation report for detailed feedback
+
+---
+*Automated validation by Bob AI for public repository submission*"""
+    }
+}
+
+// Helper function for HTML report
+def generateHTMLReportForPublicRepo(results, prContent) {
+    def status = results.approved ? "APPROVED" : "REJECTED"
+    def statusColor = results.approved ? "#28a745" : "#dc3545"
+    def statusIcon = results.approved ? "✅" : "❌"
+    
+    def issuesHTML = ""
+    if (results.issues && results.issues.size() > 0) {
+        issuesHTML = results.issues.collect { issue ->
+            def severityColor = issue.severity == "CRITICAL" ? "#dc3545" : (issue.severity == "HIGH" ? "#dc3545" : (issue.severity == "MEDIUM" ? "#ffc107" : "#17a2b8"))
+            """
+            <div class="issue" style="border-left: 4px solid ${severityColor}; padding: 15px; margin: 10px 0; background: #f8f9fa;">
+                <h4 style="margin: 0 0 10px 0; color: ${severityColor};">${issue.severity ?: 'MEDIUM'}: ${issue.type ?: 'Unknown'}</h4>
+                <p><strong>Location:</strong> ${issue.location ?: 'N/A'}</p>
+                <p><strong>Message:</strong> ${issue.message ?: 'N/A'}</p>
+                ${issue.suggestion ? "<p><strong>Suggestion:</strong> ${issue.suggestion}</p>" : ""}
+                ${issue.public_impact ? "<p><strong>Public Impact:</strong> ${issue.public_impact}</p>" : ""}
+            </div>
+            """
+        }.join('\n')
+    }
+    
+    return """<!DOCTYPE html>
+<html>
+<head>
+    <title>Bob Validation Report - Public Repository</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; background: #f5f5f5; }
+        .container { max-width: 1200px; margin: 0 auto; background: white; padding: 30px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        .header { text-align: center; margin-bottom: 30px; }
+        .status { font-size: 48px; margin: 20px 0; }
+        .status-text { font-size: 32px; font-weight: bold; color: ${statusColor}; }
+        .warning { background: #fff3cd; border-left: 4px solid #ffc107; padding: 15px; margin: 20px 0; }
+        .info { background: #e9ecef; padding: 15px; border-radius: 4px; margin: 20px 0; }
+        .info-item { margin: 5px 0; }
+        .issues { margin-top: 30px; }
+        .footer { text-align: center; margin-top: 30px; color: #6c757d; font-size: 14px; }
+        .public-repo-badge { background: #007bff; color: white; padding: 5px 10px; border-radius: 4px; display: inline-block; margin: 10px 0; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>Bob AI Content Validation Report</h1>
+            <div class="public-repo-badge">PUBLIC REPOSITORY SUBMISSION</div>
+            <div class="status">${statusIcon}</div>
+            <div class="status-text">${status}</div>
+        </div>
+        
+        ${!results.approved ? '<div class="warning"><strong>⚠️  WARNING:</strong> This content is NOT approved for public repository submission. Do not create a PR to the public repository until all issues are resolved.</div>' : ''}
+        
+        <div class="info">
+            <h3>Build Information</h3>
+            <div class="info-item"><strong>Job:</strong> ${env.JOB_NAME}</div>
+            <div class="info-item"><strong>Build:</strong> #${env.BUILD_NUMBER}</div>
+            <div class="info-item"><strong>IBM Fork:</strong> ${IBM_FORK_REPO}</div>
+            <div class="info-item"><strong>Public Repository:</strong> ${PUBLIC_REPO}</div>
+            <div class="info-item"><strong>Branch:</strong> ${env.GIT_BRANCH}</div>
+            <div class="info-item"><strong>PR:</strong> #${env.CHANGE_ID ?: 'N/A'}</div>
+            <div class="info-item"><strong>Author:</strong> ${prContent.author?.name ?: 'N/A'} (${prContent.author?.email ?: 'N/A'})</div>
+            <div class="info-item"><strong>IBM Contributor:</strong> ${prContent.author?.is_ibm ? 'Yes' : 'No'}</div>
+            <div class="info-item"><strong>Validation Confidence:</strong> ${results.confidence ?: 'N/A'}</div>
+            <div class="info-item"><strong>Timestamp:</strong> ${new Date()}</div>
+        </div>
+        
+        ${issuesHTML ? "<div class='issues'><h3>Issues Detected</h3>${issuesHTML}</div>" : "<p style='text-align: center; color: #28a745; font-size: 18px;'>✅ No issues detected. Content is safe for public repository submission!</p>"}
+        
+        ${env.PUBLIC_PR_URL ? "<div class='info'><h3>Public PR Created</h3><p>PR URL: <a href='${env.PUBLIC_PR_URL}'>${env.PUBLIC_PR_URL}</a></p></div>" : ""}
+        
+        <div class="footer">
+            <p>Automated validation by Bob AI for public repository submission | Jenkins Build #${env.BUILD_NUMBER}</p>
+        </div>
+    </div>
+</body>
+</html>"""
+}
