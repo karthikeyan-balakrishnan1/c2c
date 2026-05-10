@@ -34,7 +34,8 @@ pipeline {
         VALIDATION_DIR = "${WORKSPACE}/bob-validation"
         
         // Git configuration - supports any branch
-        GIT_BRANCH = "${env.CHANGE_BRANCH ?: env.GIT_BRANCH ?: env.BRANCH_NAME ?: 'main'}"
+        // Priority: Parameter > PR branch > Git branch > Branch name > Default
+        GIT_BRANCH = "${params.BRANCH_TO_BUILD ?: env.CHANGE_BRANCH ?: env.GIT_BRANCH ?: env.BRANCH_NAME ?: 'main'}"
         BASE_BRANCH = "${env.CHANGE_TARGET ?: params.BASE_BRANCH ?: 'main'}"
         
         // IBM specific settings
@@ -42,6 +43,19 @@ pipeline {
     }
     
     parameters {
+        // Branch Selection
+        string(
+            name: 'BRANCH_TO_BUILD',
+            defaultValue: 'main',
+            description: 'Branch to build and validate (e.g., main, feature/new-api, develop)'
+        )
+        string(
+            name: 'BASE_BRANCH',
+            defaultValue: 'main',
+            description: 'Base branch to compare against (e.g., main, develop, master)'
+        )
+        
+        // Repository Configuration
         string(
             name: 'IBM_FORK_REPO',
             defaultValue: 'karthikeyan-balakrishnan-ibm/c2c',
@@ -52,25 +66,83 @@ pipeline {
             defaultValue: 'IBM/c2c',
             description: 'Public/external repository (format: org/repo)'
         )
-        string(
-            name: 'BASE_BRANCH',
-            defaultValue: 'main',
-            description: 'Base branch to compare against (e.g., main, develop, master)'
+        
+        // Validation Options
+        choice(
+            name: 'VALIDATION_LEVEL',
+            choices: ['STRICT', 'STANDARD', 'RELAXED'],
+            description: 'Validation strictness level: STRICT (public repo), STANDARD (normal), RELAXED (internal only)'
         )
         booleanParam(
             name: 'SKIP_VALIDATION',
             defaultValue: false,
-            description: 'Skip Bob validation (emergency only - requires approval)'
+            description: '⚠️ Skip Bob validation (emergency only - requires approval)'
         )
+        booleanParam(
+            name: 'CHECK_OFFENSIVE_CONTENT',
+            defaultValue: true,
+            description: 'Check for offensive language and inappropriate content'
+        )
+        booleanParam(
+            name: 'CHECK_CONFIDENTIAL_INFO',
+            defaultValue: true,
+            description: 'Check for IBM confidential information and internal references'
+        )
+        booleanParam(
+            name: 'CHECK_SECURITY_ISSUES',
+            defaultValue: true,
+            description: 'Check for security vulnerabilities and exposed secrets'
+        )
+        booleanParam(
+            name: 'CHECK_IBM_PATTERNS',
+            defaultValue: true,
+            description: 'Check for IBM-specific patterns that should be generic'
+        )
+        
+        // PR Creation Options
         booleanParam(
             name: 'AUTO_CREATE_PR',
             defaultValue: true,
             description: 'Automatically create PR to public repo after validation passes'
         )
+        string(
+            name: 'PR_TITLE',
+            defaultValue: '',
+            description: 'Custom PR title (leave empty to use commit message)'
+        )
+        text(
+            name: 'PR_DESCRIPTION',
+            defaultValue: '',
+            description: 'Custom PR description (leave empty to use commit body)'
+        )
+        
+        // Notification Options
+        booleanParam(
+            name: 'SEND_EMAIL_NOTIFICATION',
+            defaultValue: true,
+            description: 'Send email notification on validation failure'
+        )
+        string(
+            name: 'NOTIFICATION_EMAIL',
+            defaultValue: '',
+            description: 'Additional email addresses for notifications (comma-separated)'
+        )
+        
+        // Advanced Options
         booleanParam(
             name: 'DEBUG_MODE',
             defaultValue: false,
-            description: 'Enable debug output'
+            description: 'Enable verbose debug output'
+        )
+        booleanParam(
+            name: 'DRY_RUN',
+            defaultValue: false,
+            description: 'Dry run mode - validate but don\'t create PR or update status'
+        )
+        choice(
+            name: 'BOB_CONFIDENCE_THRESHOLD',
+            choices: ['HIGH', 'MEDIUM', 'LOW'],
+            description: 'Minimum confidence level required to pass validation'
         )
     }
     
@@ -923,30 +995,36 @@ if __name__ == "__main__":
                     """
                 }
                 
-                emailext(
-                    subject: "⚠️  Bob Validation Failed for Public Repo: ${env.JOB_NAME} #${env.BUILD_NUMBER}",
-                    body: """
-                        Bob content validation has FAILED for public repository submission.
-                        
-                        This is CRITICAL because the content was intended for a public repository.
-                        
-                        Job: ${env.JOB_NAME}
-                        Build: ${env.BUILD_NUMBER}
-                        IBM Fork PR: #${env.CHANGE_ID ?: 'N/A'}
-                        Target Public Repo: ${PUBLIC_REPO}
-                        Branch: ${GIT_BRANCH}
-                        
-                        ⚠️  DO NOT submit this content to the public repository until issues are resolved.
-                        
-                        Review the validation results:
-                        ${env.BUILD_URL}Bob_20Validation_20Report_20_28Public_20Repo_29/
-                        
-                        Build Console: ${env.BUILD_URL}console
-                        
-                        Contact DevOps team if you need assistance.
-                    """,
-                    to: "${env.CHANGE_AUTHOR_EMAIL ?: 'karthikeyan.balakrishnan1@ibm.com'}"
-                )
+                // Send email notification (optional - will skip if email not configured)
+                try {
+                    emailext(
+                        subject: "⚠️  Bob Validation Failed for Public Repo: ${env.JOB_NAME} #${env.BUILD_NUMBER}",
+                        body: """
+                            Bob content validation has FAILED for public repository submission.
+                            
+                            This is CRITICAL because the content was intended for a public repository.
+                            
+                            Job: ${env.JOB_NAME}
+                            Build: ${env.BUILD_NUMBER}
+                            IBM Fork PR: #${env.CHANGE_ID ?: 'N/A'}
+                            Target Public Repo: ${PUBLIC_REPO}
+                            Branch: ${GIT_BRANCH}
+                            
+                            ⚠️  DO NOT submit this content to the public repository until issues are resolved.
+                            
+                            Review the validation results:
+                            ${env.BUILD_URL}console
+                            
+                            Contact DevOps team if you need assistance.
+                        """,
+                        to: "${env.CHANGE_AUTHOR_EMAIL ?: 'karthikeyan.balakrishnan1@ibm.com'}",
+                        attachLog: true
+                    )
+                    echo "✅ Email notification sent"
+                } catch (Exception e) {
+                    echo "⚠️  Email notification skipped (email not configured): ${e.message}"
+                    echo "   Configure Jenkins email to receive notifications"
+                }
             }
         }
     }
