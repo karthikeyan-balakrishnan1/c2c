@@ -17,6 +17,15 @@ pipeline {
         // Bob Shell configuration
         BOB_SHELL_PATH = '/opt/homebrew/bin/bob'
         
+        // Node.js configuration (required by Bob Shell)
+        // Bob Shell requires Node.js to run. Update these paths based on your installation.
+        // Common Node.js locations:
+        //   - Homebrew (macOS): /opt/homebrew/bin
+        //   - Standard (Linux): /usr/bin or /usr/local/bin
+        //   - NVM: ~/.nvm/versions/node/vX.X.X/bin
+        NODE_HOME = '/opt/homebrew/bin/node'  // Directory containing node executable
+        PATH = "${NODE_HOME}:/usr/local/bin:/usr/bin:${env.PATH}"
+        
         // Working directories
         WORKSPACE_DIR = "${WORKSPACE}"
         VALIDATION_DIR = "${WORKSPACE}/bob-validation"
@@ -99,36 +108,89 @@ pipeline {
         stage('Verify Bob Shell') {
             steps {
                 script {
-                    echo "🔍 Verifying Bob Shell availability..."
+                    echo "🔍 Verifying Bob Shell and Node.js availability..."
                     echo "   Bob Shell Path: ${BOB_SHELL_PATH}"
+                    echo "   Node.js Path: ${NODE_HOME}"
                     
-                    def bobCheck = sh(
+                    def verificationCheck = sh(
                         script: """
+                            set +e  # Don't exit on error
+                            ERRORS=0
+                            
+                            # Check Node.js
+                            echo ""
+                            echo "=== Checking Node.js ==="
+                            if command -v node >/dev/null 2>&1; then
+                                NODE_VERSION=\$(node --version)
+                                echo "✅ Node.js found: \$NODE_VERSION"
+                                echo "   Location: \$(which node)"
+                            else
+                                echo "❌ Node.js not found in PATH"
+                                echo ""
+                                echo "Searching for Node.js in common locations..."
+                                ls -la /usr/bin/node 2>/dev/null || echo "  - Not in /usr/bin"
+                                ls -la /usr/local/bin/node 2>/dev/null || echo "  - Not in /usr/local/bin"
+                                ls -la /opt/homebrew/bin/node 2>/dev/null || echo "  - Not in /opt/homebrew/bin"
+                                ls -la ~/.nvm/versions/node/*/bin/node 2>/dev/null || echo "  - Not in ~/.nvm"
+                                echo ""
+                                echo "⚠️  Bob Shell requires Node.js to run!"
+                                echo "Please install Node.js or update NODE_HOME in Jenkinsfile"
+                                ERRORS=\$((ERRORS + 1))
+                            fi
+                            
+                            # Check Bob Shell
+                            echo ""
+                            echo "=== Checking Bob Shell ==="
                             if [ -f "${BOB_SHELL_PATH}" ]; then
                                 echo "✅ Bob Shell found at: ${BOB_SHELL_PATH}"
-                                ${BOB_SHELL_PATH} --help | head -5 || echo "Bob exists but --help failed"
-                                exit 0
+                                
+                                # Try to run Bob
+                                if ${BOB_SHELL_PATH} --help >/dev/null 2>&1; then
+                                    echo "✅ Bob Shell is executable and working"
+                                    ${BOB_SHELL_PATH} --help | head -5
+                                else
+                                    echo "⚠️  Bob Shell exists but failed to run"
+                                    echo "This might be due to missing Node.js or permissions"
+                                    ERRORS=\$((ERRORS + 1))
+                                fi
                             else
                                 echo "❌ Bob Shell not found at: ${BOB_SHELL_PATH}"
                                 echo ""
                                 echo "Searching for Bob in common locations..."
                                 which bob || echo "  - Not in PATH"
                                 ls -la /usr/local/bin/bob 2>/dev/null || echo "  - Not in /usr/local/bin"
+                                ls -la /opt/homebrew/bin/bob 2>/dev/null || echo "  - Not in /opt/homebrew/bin"
                                 ls -la /opt/ibm/bob/bin/bob 2>/dev/null || echo "  - Not in /opt/ibm"
                                 ls -la ~/.local/bin/bob 2>/dev/null || echo "  - Not in ~/.local/bin"
                                 echo ""
                                 echo "Please update BOB_SHELL_PATH in Jenkinsfile environment section"
+                                ERRORS=\$((ERRORS + 1))
+                            fi
+                            
+                            echo ""
+                            echo "=== Verification Summary ==="
+                            if [ \$ERRORS -eq 0 ]; then
+                                echo "✅ All checks passed!"
+                                exit 0
+                            else
+                                echo "❌ \$ERRORS error(s) found"
+                                echo ""
+                                echo "Common fixes:"
+                                echo "1. Install Node.js: https://nodejs.org/"
+                                echo "2. Update NODE_HOME in Jenkinsfile to point to Node.js bin directory"
+                                echo "3. Update BOB_SHELL_PATH to correct Bob location"
+                                echo "4. Ensure PATH includes both Node.js and Bob directories"
                                 exit 1
                             fi
                         """,
                         returnStatus: true
                     )
                     
-                    if (bobCheck != 0) {
-                        error("❌ Bob Shell verification failed. Please check the path and ensure Bob is installed.")
+                    if (verificationCheck != 0) {
+                        error("❌ Verification failed. Please check Node.js and Bob Shell installation.")
                     }
                     
-                    echo "✅ Bob Shell verified successfully"
+                    echo "✅ Node.js and Bob Shell verified successfully"
                 }
             }
         }
