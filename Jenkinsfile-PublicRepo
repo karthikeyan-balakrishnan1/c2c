@@ -480,13 +480,30 @@ Be EXTRA strict because this is going to a public repository."""
         print(f"Using Node.js at: {node_path}")
         print(f"Using Bob Shell at: {bob_path}")
         print(f"API Key configured: {'Yes' if bob_api_key else 'No'}")
+        if bob_api_key:
+            print(f"API Key length: {len(bob_api_key)}")
+            print(f"API Key starts with: {bob_api_key[:10]}..." if len(bob_api_key) > 10 else "API Key too short")
+        else:
+            print("⚠️  WARNING: BOB_API_KEY environment variable is empty!")
+            print("Available environment variables:")
+            for key in sorted(os.environ.keys()):
+                if 'BOB' in key.upper() or 'API' in key.upper():
+                    print(f"  - {key}: {'<set>' if os.environ[key] else '<empty>'}")
         
         # Prepare environment with API key
+        # Bob Shell might expect API_KEY, BOBSHELL_API_KEY, or read from config
         bob_env = {
             **os.environ,
             'PATH': f"/opt/homebrew/bin:{os.environ.get('PATH', '')}",
-            'API_KEY': bob_api_key  # Bob Shell expects API_KEY environment variable
+            'API_KEY': bob_api_key,  # Standard API_KEY
+            'BOBSHELL_API_KEY': bob_api_key,  # Alternative name
+            'BOB_API_KEY': bob_api_key  # Keep original name too
         }
+        
+        print(f"Environment variables being passed to Bob:")
+        print(f"  - API_KEY: {'<set>' if bob_env.get('API_KEY') else '<not set>'}")
+        print(f"  - BOBSHELL_API_KEY: {'<set>' if bob_env.get('BOBSHELL_API_KEY') else '<not set>'}")
+        print(f"  - BOB_API_KEY: {'<set>' if bob_env.get('BOB_API_KEY') else '<not set>'}")
         
         # Bob is a Node.js script, so we can call it directly or via node
         # Try direct execution first (if bob is executable and in PATH)
