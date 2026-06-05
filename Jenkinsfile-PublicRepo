@@ -768,11 +768,19 @@ Be EXTRA strict because this is going to a public repository."""
                     "raw_output": result.stdout[:500]  # First 500 chars only
                 }
         else:
+            # Print full error for debugging
+            print(f"❌ Bob Shell failed with exit code {result.returncode}")
+            if result.stderr:
+                print(f"STDERR: {result.stderr}")
+            if result.stdout:
+                print(f"STDOUT: {result.stdout}")
+            
             return {
                 "approved": False,
                 "confidence": "LOW",
                 "error": f"Bob Shell exited with code {result.returncode}",
-                "stderr": result.stderr[:500] if result.stderr else "No error output"
+                "stderr": result.stderr if result.stderr else "No error output",
+                "stdout": result.stdout[:500] if result.stdout else "No output"
             }
     
     except subprocess.TimeoutExpired:
@@ -884,11 +892,22 @@ if __name__ == "__main__":
     sys.exit(0 if result.get("approved", False) else 1)
 '''
                     
-                    // Run Bob validation
+                    // Run Bob validation with environment variables
                     def validationResult = sh(
                         script: """
                             cd ${VALIDATION_DIR}
                             chmod +x validate_with_bob.py
+                            
+                            # Export environment variables for Bob Shell
+                            export BOB_API_KEY="${BOB_API_KEY}"
+                            export BOBSHELL_API_KEY="${BOB_API_KEY}"
+                            export API_KEY="${BOB_API_KEY}"
+                            export BOB_SHELL_PATH="${BOB_SHELL_PATH}"
+                            export BOB_JS_PATH="${BOB_JS_PATH}"
+                            export NODE_PATH="${NODE_PATH}"
+                            export PATH="${PATH}"
+                            
+                            # Run validation
                             python3 validate_with_bob.py pr_content.json
                         """,
                         returnStatus: true
