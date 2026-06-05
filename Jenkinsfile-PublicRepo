@@ -1153,38 +1153,39 @@ if __name__ == "__main__":
                                 -H "Content-Type: application/json" \
                                 -d '{"state": "failure", "context": "Bob Validation (Public Repo)", "description": "Content validation failed - not safe for public submission"}' \
                                 "https://api.github.com/repos/${IBM_FORK_REPO}/statuses/${env.GIT_COMMIT}"
-                    """
-                }
-                
-                // Send email notification (optional - will skip if email not configured)
-                try {
-                    emailext(
-                        subject: "⚠️  Bob Validation Failed for Public Repo: ${env.JOB_NAME} #${env.BUILD_NUMBER}",
-                        body: """
-                            Bob content validation has FAILED for public repository submission.
-                            
-                            This is CRITICAL because the content was intended for a public repository.
-                            
-                            Job: ${env.JOB_NAME}
-                            Build: ${env.BUILD_NUMBER}
-                            IBM Fork PR: #${env.CHANGE_ID ?: 'N/A'}
-                            Target Public Repo: ${PUBLIC_REPO}
-                            Branch: ${GIT_BRANCH}
-                            
-                            ⚠️  DO NOT submit this content to the public repository until issues are resolved.
-                            
-                            Review the validation results:
-                            ${env.BUILD_URL}console
-                            
-                            Contact DevOps team if you need assistance.
-                        """,
-                        to: "${env.CHANGE_AUTHOR_EMAIL ?: 'karthikeyan.balakrishnan1@ibm.com'}",
-                        attachLog: true
-                    )
-                    echo "✅ Email notification sent"
-                } catch (Exception e) {
-                    echo "⚠️  Email notification skipped (email not configured): ${e.message}"
-                    echo "   Configure Jenkins email to receive notifications"
+                        """
+                    }
+                    
+                    // Send email notification (optional - will skip if email not configured)
+                    try {
+                        emailext(
+                            subject: "⚠️  Bob Validation Failed for Public Repo: ${env.JOB_NAME} #${env.BUILD_NUMBER}",
+                            body: """
+                                Bob content validation has FAILED for public repository submission.
+                                
+                                This is CRITICAL because the content was intended for a public repository.
+                                
+                                Job: ${env.JOB_NAME}
+                                Build: ${env.BUILD_NUMBER}
+                                IBM Fork PR: #${env.CHANGE_ID ?: 'N/A'}
+                                Target Public Repo: ${PUBLIC_REPO}
+                                Branch: ${GIT_BRANCH}
+                                
+                                ⚠️  DO NOT submit this content to the public repository until issues are resolved.
+                                
+                                Review the validation results:
+                                ${env.BUILD_URL}console
+                                
+                                Contact DevOps team if you need assistance.
+                            """,
+                            to: "${env.CHANGE_AUTHOR_EMAIL ?: 'karthikeyan.balakrishnan1@ibm.com'}",
+                            attachLog: true
+                        )
+                        echo "✅ Email notification sent"
+                    } catch (Exception e) {
+                        echo "⚠️  Email notification skipped (email not configured): ${e.message}"
+                        echo "   Configure Jenkins email to receive notifications"
+                    }
                 }
             }
         }
