@@ -768,22 +768,12 @@ Be EXTRA strict because this is going to a public repository."""
                     "raw_output": result.stdout[:500]  # First 500 chars only
                 }
         else:
-            # Bob Shell failed - capture detailed error info
-            error_details = {
+            return {
                 "approved": False,
                 "confidence": "LOW",
                 "error": f"Bob Shell exited with code {result.returncode}",
-                "stderr": result.stderr[:1000] if result.stderr else "No error output",
-                "stdout": result.stdout[:1000] if result.stdout else "No stdout"
+                "stderr": result.stderr[:500] if result.stderr else "No error output"
             }
-            
-            # Print detailed error for debugging
-            print(f"❌ Bob Shell Error Details:")
-            print(f"   Return Code: {result.returncode}")
-            print(f"   STDERR: {result.stderr[:500] if result.stderr else 'None'}")
-            print(f"   STDOUT: {result.stdout[:500] if result.stdout else 'None'}")
-            
-            return error_details
     
     except subprocess.TimeoutExpired:
         print("❌ Bob Shell timeout")
@@ -1060,19 +1050,7 @@ if __name__ == "__main__":
             script {
                 echo "🧹 Cleaning up and archiving artifacts..."
                 
-                // Wrap in node block to provide FilePath context
-                node {
-                    // Use try-catch to handle archiving gracefully
-                    try {
-                        if (fileExists('bob-validation')) {
-                            archiveArtifacts artifacts: 'bob-validation/**/*', allowEmptyArchive: true
-                        } else {
-                            echo "⚠️  bob-validation directory not found, skipping artifact archiving"
-                        }
-                    } catch (Exception e) {
-                        echo "⚠️  Could not archive artifacts: ${e.message}"
-                    }
-                }
+                archiveArtifacts artifacts: 'bob-validation/**/*', allowEmptyArchive: true
                 
                 // publishHTML([
                 //     reportDir: 'bob-validation',
@@ -1088,18 +1066,14 @@ if __name__ == "__main__":
             script {
                 echo "✅ Pipeline completed successfully!"
                 
-                try {
-                    if (env.CHANGE_ID && env.GITHUB_TOKEN) {
-                        sh """
-                            curl -X POST \
-                                -H "Authorization: token ${GITHUB_TOKEN}" \
-                                -H "Content-Type: application/json" \
-                                -d '{"state": "success", "context": "Bob Validation (Public Repo)", "description": "Content validated for public submission"}' \
-                                "https://api.github.com/repos/${IBM_FORK_REPO}/statuses/${env.GIT_COMMIT}"
-                        """
-                    }
-                } catch (Exception e) {
-                    echo "⚠️  Could not update GitHub status: ${e.message}"
+                if (env.CHANGE_ID) {
+                    sh """
+                        curl -X POST \
+                            -H "Authorization: token ${GITHUB_TOKEN}" \
+                            -H "Content-Type: application/json" \
+                            -d '{"state": "success", "context": "Bob Validation (Public Repo)", "description": "Content validated for public submission"}' \
+                            "https://api.github.com/repos/${IBM_FORK_REPO}/statuses/${env.GIT_COMMIT}"
+                    """
                 }
                 
                 if (env.PUBLIC_PR_URL) {
@@ -1112,18 +1086,14 @@ if __name__ == "__main__":
             script {
                 echo "❌ Pipeline failed!"
                 
-                try {
-                    if (env.CHANGE_ID && env.GITHUB_TOKEN) {
-                        sh """
-                            curl -X POST \
-                                -H "Authorization: token ${GITHUB_TOKEN}" \
-                                -H "Content-Type: application/json" \
-                                -d '{"state": "failure", "context": "Bob Validation (Public Repo)", "description": "Content validation failed - not safe for public submission"}' \
-                                "https://api.github.com/repos/${IBM_FORK_REPO}/statuses/${env.GIT_COMMIT}"
-                        """
-                    }
-                } catch (Exception e) {
-                    echo "⚠️  Could not update GitHub status: ${e.message}"
+                if (env.CHANGE_ID) {
+                    sh """
+                        curl -X POST \
+                            -H "Authorization: token ${GITHUB_TOKEN}" \
+                            -H "Content-Type: application/json" \
+                            -d '{"state": "failure", "context": "Bob Validation (Public Repo)", "description": "Content validation failed - not safe for public submission"}' \
+                            "https://api.github.com/repos/${IBM_FORK_REPO}/statuses/${env.GIT_COMMIT}"
+                    """
                 }
                 
                 // Send email notification (optional - will skip if email not configured)
