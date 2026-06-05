@@ -655,15 +655,33 @@ Be EXTRA strict because this is going to a public repository."""
             print(f"🔑 API Key length: {len(bob_api_key)}")
         
         # Prepare environment with API key
-        # Bob Shell typically uses ANTHROPIC_API_KEY for Claude API
+        # Bob Shell uses API_KEY environment variable
         bob_env = {
             **os.environ,
             'PATH': f"/opt/homebrew/bin:{os.environ.get('PATH', '')}",
-            'ANTHROPIC_API_KEY': bob_api_key,  # Primary key for Claude/Anthropic
-            'API_KEY': bob_api_key,
+            'API_KEY': bob_api_key,  # Primary key for Bob Shell
             'BOBSHELL_API_KEY': bob_api_key,
             'BOB_API_KEY': bob_api_key
         }
+        
+        print(f"🔧 Bob path: {bob_path}")
+        print(f"🔧 Environment API_KEY is set: {'API_KEY' in bob_env}")
+        
+        # Test Bob Shell authentication first with a simple command
+        print("🧪 Testing Bob Shell authentication...")
+        test_result = subprocess.run(
+            ['echo', 'test', '|', bob_path],
+            shell=True,
+            capture_output=True,
+            text=True,
+            timeout=10,
+            env=bob_env
+        )
+        
+        if test_result.returncode != 0:
+            print(f"⚠️  Bob Shell test failed: {test_result.stderr}")
+        else:
+            print("✅ Bob Shell authentication test passed")
         
         # Bob is a Node.js script, so we can call it directly or via node
         # Try direct execution first (if bob is executable and in PATH)
