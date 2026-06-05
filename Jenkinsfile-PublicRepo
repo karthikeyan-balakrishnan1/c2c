@@ -648,10 +648,18 @@ Be EXTRA strict because this is going to a public repository."""
                 "error": "Bob Shell API key not configured in Jenkins"
             }
         
+        # Debug: Show API key format (first/last 4 chars only for security)
+        if len(bob_api_key) > 8:
+            print(f"🔑 API Key format: {bob_api_key[:4]}...{bob_api_key[-4:]} (length: {len(bob_api_key)})")
+        else:
+            print(f"🔑 API Key length: {len(bob_api_key)}")
+        
         # Prepare environment with API key
+        # Bob Shell typically uses ANTHROPIC_API_KEY for Claude API
         bob_env = {
             **os.environ,
             'PATH': f"/opt/homebrew/bin:{os.environ.get('PATH', '')}",
+            'ANTHROPIC_API_KEY': bob_api_key,  # Primary key for Claude/Anthropic
             'API_KEY': bob_api_key,
             'BOBSHELL_API_KEY': bob_api_key,
             'BOB_API_KEY': bob_api_key
@@ -899,6 +907,8 @@ if __name__ == "__main__":
                             chmod +x validate_with_bob.py
                             
                             # Export environment variables for Bob Shell
+                            # Bob Shell uses ANTHROPIC_API_KEY for Claude API authentication
+                            export ANTHROPIC_API_KEY="${BOB_API_KEY}"
                             export BOB_API_KEY="${BOB_API_KEY}"
                             export BOBSHELL_API_KEY="${BOB_API_KEY}"
                             export API_KEY="${BOB_API_KEY}"
@@ -906,6 +916,9 @@ if __name__ == "__main__":
                             export BOB_JS_PATH="${BOB_JS_PATH}"
                             export NODE_PATH="${NODE_PATH}"
                             export PATH="${PATH}"
+                            
+                            # Debug: Show that API key is set (without revealing it)
+                            echo "🔑 API Key configured: \${ANTHROPIC_API_KEY:0:4}...\${ANTHROPIC_API_KEY: -4}"
                             
                             # Run validation
                             python3 validate_with_bob.py pr_content.json
