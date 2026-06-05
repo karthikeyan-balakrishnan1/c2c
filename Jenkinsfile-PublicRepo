@@ -671,21 +671,31 @@ Be EXTRA strict because this is going to a public repository."""
         # Try direct execution first (if bob is executable and in PATH)
         # If that fails, try running via node explicitly
         
-        # Method 1: Use the working format from tests: bob --output-format json --chat-mode code
-        # Pass prompt as command line argument (Test 6 format)
+        # Method 1: Use shell=True to match terminal behavior exactly
+        # This ensures environment variables are inherited the same way as in terminal
         try:
+            # Build command string
+            cmd = f'{bob_path} --output-format json --chat-mode code'
+            
+            print(f"🔧 Running command: {cmd}")
+            print(f"🔧 Prompt preview: {prompt[:100]}...")
+            
+            # Use shell=True and pass prompt as stdin, matching terminal usage
             result = subprocess.run(
-                [
-                    bob_path,
-                    '--output-format', 'json',
-                    '--chat-mode', 'code',
-                    prompt
-                ],
+                cmd,
+                input=prompt,
+                shell=True,
                 capture_output=True,
                 text=True,
                 timeout=120,
                 env=bob_env
             )
+            
+            print(f"🔧 Exit code: {result.returncode}")
+            if result.stdout:
+                print(f"🔧 STDOUT preview: {result.stdout[:200]}")
+            if result.stderr:
+                print(f"🔧 STDERR preview: {result.stderr[:200]}")
             
             if result.returncode != 0 and 'node' in result.stderr.lower():
                 # If it failed due to node not found, try Method 2
