@@ -687,15 +687,12 @@ Be EXTRA strict because this is going to a public repository."""
         # Try direct execution first (if bob is executable and in PATH)
         # If that fails, try running via node explicitly
         
-        # Method 1: Try direct execution (works if bob is in PATH and executable)
+        # Method 1: Try direct execution with prompt via stdin (like terminal usage)
+        # This matches how you use it: echo "prompt" | bob
         try:
             result = subprocess.run(
-                [
-                    bob_path,
-                    '--output-format', 'json',
-                    '--chat-mode', 'code',
-                    prompt
-                ],
+                [bob_path],
+                input=prompt,
                 capture_output=True,
                 text=True,
                 timeout=120,
@@ -711,13 +708,8 @@ Be EXTRA strict because this is going to a public repository."""
             print(f"Direct execution failed ({e}), trying with explicit node...")
             if bob_js_path and os.path.exists(bob_js_path):
                 result = subprocess.run(
-                    [
-                        node_path,
-                        bob_js_path,
-                        '--output-format', 'json',
-                        '--chat-mode', 'code',
-                        prompt
-                    ],
+                    [node_path, bob_js_path],
+                    input=prompt,
                     capture_output=True,
                     text=True,
                     timeout=120,
@@ -726,12 +718,8 @@ Be EXTRA strict because this is going to a public repository."""
             else:
                 # Fallback: try with just 'bob' in PATH
                 result = subprocess.run(
-                    [
-                        'bob',
-                        '--output-format', 'json',
-                        '--chat-mode', 'code',
-                        prompt
-                    ],
+                    ['bob'],
+                    input=prompt,
                     capture_output=True,
                     text=True,
                     timeout=120,
