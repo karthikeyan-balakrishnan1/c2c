@@ -1060,15 +1060,18 @@ if __name__ == "__main__":
             script {
                 echo "🧹 Cleaning up and archiving artifacts..."
                 
-                // Use try-catch to handle archiving gracefully
-                try {
-                    if (fileExists('bob-validation')) {
-                        archiveArtifacts artifacts: 'bob-validation/**/*', allowEmptyArchive: true
-                    } else {
-                        echo "⚠️  bob-validation directory not found, skipping artifact archiving"
+                // Wrap in node block to provide FilePath context
+                node {
+                    // Use try-catch to handle archiving gracefully
+                    try {
+                        if (fileExists('bob-validation')) {
+                            archiveArtifacts artifacts: 'bob-validation/**/*', allowEmptyArchive: true
+                        } else {
+                            echo "⚠️  bob-validation directory not found, skipping artifact archiving"
+                        }
+                    } catch (Exception e) {
+                        echo "⚠️  Could not archive artifacts: ${e.message}"
                     }
-                } catch (Exception e) {
-                    echo "⚠️  Could not archive artifacts: ${e.message}"
                 }
                 
                 // publishHTML([
