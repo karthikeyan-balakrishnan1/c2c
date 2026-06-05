@@ -227,6 +227,51 @@ pipeline {
                             # Check Bob Shell
                             echo ""
                             echo "=== Checking Bob Shell ==="
+                            
+                            # Test API Key
+                            echo ""
+                            echo "=== Testing Bob API Key ==="
+                            if [ -n "${API_KEY}" ]; then
+                                echo "✅ API_KEY environment variable is set"
+                                echo "   Length: \${#API_KEY} characters"
+                                echo "   First 10 chars: \${API_KEY:0:10}..."
+                                
+                                # Test Bob with API key
+                                echo ""
+                                echo "Testing Bob Shell with API key..."
+                                if [ -f "${BOB_SHELL_PATH}" ]; then
+                                    TEST_OUTPUT=\$(echo "test" | ${BOB_SHELL_PATH} 2>&1)
+                                    TEST_EXIT_CODE=\$?
+                                    
+                                    if [ \$TEST_EXIT_CODE -eq 0 ]; then
+                                        echo "✅ Bob Shell API test successful"
+                                    else
+                                        echo "❌ Bob Shell API test failed with exit code: \$TEST_EXIT_CODE"
+                                        echo "Output:"
+                                        echo "\$TEST_OUTPUT" | head -20
+                                        
+                                        if echo "\$TEST_OUTPUT" | grep -q "403"; then
+                                            echo ""
+                                            echo "⚠️  HTTP 403 Forbidden - API Key Authentication Failed"
+                                            echo "Possible causes:"
+                                            echo "  1. API key is invalid or expired"
+                                            echo "  2. API key doesn't have required permissions"
+                                            echo "  3. API key is for wrong IBM Cloud service"
+                                            echo ""
+                                            echo "Please verify your API key in Jenkins credentials"
+                                        fi
+                                        ERRORS=\$((ERRORS + 1))
+                                    fi
+                                fi
+                            else
+                                echo "❌ API_KEY environment variable is NOT set"
+                                echo "   Bob Shell requires an API key to authenticate with IBM AI services"
+                                echo "   Please configure BOB_API_KEY credential in Jenkins"
+                                ERRORS=\$((ERRORS + 1))
+                            fi
+                            
+                            echo ""
+                            echo "=== Checking Bob Shell Binary ==="
                             if [ -f "${BOB_SHELL_PATH}" ]; then
                                 echo "✅ Bob Shell found at: ${BOB_SHELL_PATH}"
                                 
