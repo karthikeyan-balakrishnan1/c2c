@@ -341,6 +341,7 @@ import json
 import subprocess
 import sys
 import os
+import time
 
 def run_git_command(cmd):
     """Run git command and return output"""
