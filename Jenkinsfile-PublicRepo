@@ -880,6 +880,7 @@ if __name__ == "__main__":
                     // Run Bob validation with environment variables
                     def validationResult = sh(
                         script: """
+                            set +x
                             cd ${VALIDATION_DIR}
                             chmod +x validate_with_bob.py
                             
