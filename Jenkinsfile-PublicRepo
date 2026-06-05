@@ -193,90 +193,21 @@ pipeline {
         stage('Verify Bob Shell') {
             steps {
                 script {
-                    echo "🔍 Verifying Bob Shell and Node.js availability..."
-                    echo "   Bob Shell Path: ${BOB_SHELL_PATH}"
-                    echo "   Node.js Path: ${NODE_HOME}"
-                    echo "   Current PATH: ${env.PATH}"
-                    
+                    // Silent verification - only fail if Bob is not available
                     def verificationCheck = sh(
                         script: """
-                            set +e  # Don't exit on error
-                            ERRORS=0
-                            
-                            # Check Node.js
-                            echo ""
-                            echo "=== Checking Node.js ==="
-                            if command -v node >/dev/null 2>&1; then
-                                NODE_VERSION=\$(node --version)
-                                echo "✅ Node.js found: \$NODE_VERSION"
-                                echo "   Location: \$(which node)"
-                            else
-                                echo "❌ Node.js not found in PATH"
-                                echo ""
-                                echo "Searching for Node.js in common locations..."
-                                ls -la /usr/bin/node 2>/dev/null || echo "  - Not in /usr/bin"
-                                ls -la /usr/local/bin/node 2>/dev/null || echo "  - Not in /usr/local/bin"
-                                ls -la /opt/homebrew/bin/node 2>/dev/null || echo "  - Not in /opt/homebrew/bin"
-                                ls -la ~/.nvm/versions/node/*/bin/node 2>/dev/null || echo "  - Not in ~/.nvm"
-                                echo ""
-                                echo "⚠️  Bob Shell requires Node.js to run!"
-                                echo "Please install Node.js or update NODE_HOME in Jenkinsfile"
-                                ERRORS=\$((ERRORS + 1))
-                            fi
-                            
-                            # Check Bob Shell
-                            echo ""
-                            echo "=== Checking Bob Shell ==="
-                            if [ -f "${BOB_SHELL_PATH}" ]; then
-                                echo "✅ Bob Shell found at: ${BOB_SHELL_PATH}"
-                                
-                                # Try to run Bob
-                                if ${BOB_SHELL_PATH} --help >/dev/null 2>&1; then
-                                    echo "✅ Bob Shell is executable and working"
-                                    ${BOB_SHELL_PATH} --help | head -5
-                                else
-                                    echo "⚠️  Bob Shell exists but failed to run"
-                                    echo "This might be due to missing Node.js or permissions"
-                                    ERRORS=\$((ERRORS + 1))
-                                fi
-                            else
-                                echo "❌ Bob Shell not found at: ${BOB_SHELL_PATH}"
-                                echo ""
-                                echo "Searching for Bob in common locations..."
-                                which bob || echo "  - Not in PATH"
-                                ls -la /usr/local/bin/bob 2>/dev/null || echo "  - Not in /usr/local/bin"
-                                ls -la /opt/homebrew/bin/bob 2>/dev/null || echo "  - Not in /opt/homebrew/bin"
-                                ls -la /opt/ibm/bob/bin/bob 2>/dev/null || echo "  - Not in /opt/ibm"
-                                ls -la ~/.local/bin/bob 2>/dev/null || echo "  - Not in ~/.local/bin"
-                                echo ""
-                                echo "Please update BOB_SHELL_PATH in Jenkinsfile environment section"
-                                ERRORS=\$((ERRORS + 1))
-                            fi
-                            
-                            echo ""
-                            echo "=== Verification Summary ==="
-                            if [ \$ERRORS -eq 0 ]; then
-                                echo "✅ All checks passed!"
-                                exit 0
-                            else
-                                echo "❌ \$ERRORS error(s) found"
-                                echo ""
-                                echo "Common fixes:"
-                                echo "1. Install Node.js: https://nodejs.org/"
-                                echo "2. Update NODE_HOME in Jenkinsfile to point to Node.js bin directory"
-                                echo "3. Update BOB_SHELL_PATH to correct Bob location"
-                                echo "4. Ensure PATH includes both Node.js and Bob directories"
-                                exit 1
-                            fi
+                            set +x
+                            command -v node >/dev/null 2>&1 || exit 1
+                            [ -f "${BOB_SHELL_PATH}" ] || exit 1
+                            ${BOB_SHELL_PATH} --help >/dev/null 2>&1 || exit 1
+                            exit 0
                         """,
                         returnStatus: true
                     )
                     
                     if (verificationCheck != 0) {
-                        error("❌ Verification failed. Please check Node.js and Bob Shell installation.")
+                        error("❌ Bob Shell or Node.js not available. Please check installation.")
                     }
-                    
-                    echo "✅ Node.js and Bob Shell verified successfully"
                 }
             }
         }
@@ -877,27 +808,30 @@ if __name__ == "__main__":
     sys.exit(0 if result.get("approved", False) else 1)
 '''
                     
-                    // Run Bob validation with environment variables
-                    def validationResult = sh(
-                        script: """
-                            set +x
-                            cd ${VALIDATION_DIR}
-                            chmod +x validate_with_bob.py
-                            
-                            # Export environment variables for Bob Shell
-                            export BOBSHELL_API_KEY="${BOB_API_KEY}"
-                            export API_KEY="${BOB_API_KEY}"
-                            export BOB_API_KEY="${BOB_API_KEY}"
-                            export BOB_SHELL_PATH="${BOB_SHELL_PATH}"
-                            export BOB_JS_PATH="${BOB_JS_PATH}"
-                            export NODE_PATH="${NODE_PATH}"
-                            export PATH="${PATH}"
-                            
-                            # Run validation
-                            python3 validate_with_bob.py pr_content.json
-                        """,
-                        returnStatus: true
-                    )
+                    // Run Bob validation with environment variables using withCredentials
+                    def validationResult
+                    withCredentials([string(credentialsId: 'bob-api-key', variable: 'BOB_API_KEY_SECRET')]) {
+                        validationResult = sh(
+                            script: """
+                                set +x
+                                cd ${VALIDATION_DIR}
+                                chmod +x validate_with_bob.py
+                                
+                                # Export environment variables for Bob Shell
+                                export BOBSHELL_API_KEY="\${BOB_API_KEY_SECRET}"
+                                export API_KEY="\${BOB_API_KEY_SECRET}"
+                                export BOB_API_KEY="\${BOB_API_KEY_SECRET}"
+                                export BOB_SHELL_PATH="${BOB_SHELL_PATH}"
+                                export BOB_JS_PATH="${BOB_JS_PATH}"
+                                export NODE_PATH="${NODE_PATH}"
+                                export PATH="${PATH}"
+                                
+                                # Run validation
+                                python3 validate_with_bob.py pr_content.json
+                            """,
+                            returnStatus: true
+                        )
+                    }
                     
                     // Read validation results using native Groovy JSON parsing
                     def resultsFile = "${VALIDATION_DIR}/bob_validation_result.json"
