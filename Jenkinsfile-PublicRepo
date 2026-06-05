@@ -631,14 +631,13 @@ Please respond in JSON format with:
 Be EXTRA strict because this is going to a public repository."""
     
     print("🤖 Calling Bob Shell for public repo validation...")
-    print(f"Prompt length: {len(prompt)} characters")
     
     try:
         # Get Bob Shell and Node.js paths from environment
         bob_path = os.getenv('BOB_SHELL_PATH', 'bob')
         node_path = os.getenv('NODE_PATH', 'node')
         bob_js_path = os.getenv('BOB_JS_PATH', '')
-        bob_api_key = os.getenv('BOB_API_KEY', '').strip()  # Strip whitespace
+        bob_api_key = os.getenv('BOB_API_KEY', '').strip()
         
         if not bob_api_key:
             print("❌ ERROR: BOB_API_KEY environment variable is not set!")
@@ -648,50 +647,20 @@ Be EXTRA strict because this is going to a public repository."""
                 "error": "Bob Shell API key not configured in Jenkins"
             }
         
-        # Debug: Show API key format (first/last 4 chars only for security)
-        if len(bob_api_key) > 8:
-            print(f"🔑 API Key format: {bob_api_key[:4]}...{bob_api_key[-4:]} (length: {len(bob_api_key)})")
-        else:
-            print(f"🔑 API Key length: {len(bob_api_key)}")
-        
-        # Bob Shell uses a secret store for API keys (as of latest version)
+        # Bob Shell uses a secret store for API keys
         # The BOBSHELL_API_KEY environment variable is the primary way to provide the key
-        # Bob will store it in its secret store on first use
         bob_env = {
             **os.environ,
             'PATH': f"/opt/homebrew/bin:{os.environ.get('PATH', '')}",
-            'BOBSHELL_API_KEY': bob_api_key,  # Primary key for Bob Shell secret store
+            'BOBSHELL_API_KEY': bob_api_key,
             'API_KEY': bob_api_key,
             'BOB_API_KEY': bob_api_key
         }
         
-        print(f"🔧 Bob path: {bob_path}")
-        print(f"🔧 Environment BOBSHELL_API_KEY is set: {'BOBSHELL_API_KEY' in bob_env}")
-        
-        # Bob is a Node.js script, so we can call it directly or via node
-        # Try direct execution first (if bob is executable and in PATH)
-        # If that fails, try running via node explicitly
-        
-        # Method 1: Use shell=True to match terminal behavior exactly
-        # This ensures environment variables are inherited the same way as in terminal
+        # Execute Bob Shell with prompt via stdin
         try:
-            # First, verify API key is accessible in subprocess
-            test_env = subprocess.run(
-                'echo "API_KEY length: ${#API_KEY}"',
-                shell=True,
-                capture_output=True,
-                text=True,
-                env=bob_env
-            )
-            print(f"🧪 Environment test: {test_env.stdout.strip()}")
-            
-            # Build command string
             cmd = f'{bob_path} --output-format json --chat-mode code'
             
-            print(f"🔧 Running command: {cmd}")
-            print(f"🔧 Prompt preview: {prompt[:100]}...")
-            
-            # Use shell=True and pass prompt as stdin, matching terminal usage
             result = subprocess.run(
                 cmd,
                 input=prompt,
@@ -701,12 +670,6 @@ Be EXTRA strict because this is going to a public repository."""
                 timeout=120,
                 env=bob_env
             )
-            
-            print(f"🔧 Exit code: {result.returncode}")
-            if result.stdout:
-                print(f"🔧 STDOUT preview: {result.stdout[:200]}")
-            if result.stderr:
-                print(f"🔧 STDERR preview: {result.stderr[:200]}")
             
             if result.returncode != 0 and 'node' in result.stderr.lower():
                 # If it failed due to node not found, try Method 2
@@ -800,19 +763,11 @@ Be EXTRA strict because this is going to a public repository."""
                     "raw_output": result.stdout[:500]  # First 500 chars only
                 }
         else:
-            # Print full error for debugging
-            print(f"❌ Bob Shell failed with exit code {result.returncode}")
-            if result.stderr:
-                print(f"STDERR: {result.stderr}")
-            if result.stdout:
-                print(f"STDOUT: {result.stdout}")
-            
             return {
                 "approved": False,
                 "confidence": "LOW",
                 "error": f"Bob Shell exited with code {result.returncode}",
-                "stderr": result.stderr if result.stderr else "No error output",
-                "stdout": result.stdout[:500] if result.stdout else "No output"
+                "stderr": result.stderr if result.stderr else "No error output"
             }
     
     except subprocess.TimeoutExpired:
@@ -824,7 +779,6 @@ Be EXTRA strict because this is going to a public repository."""
         }
     
     except FileNotFoundError:
-        print("❌ Bob Shell not found")
         return {
             "approved": False,
             "confidence": "LOW",
@@ -832,7 +786,6 @@ Be EXTRA strict because this is going to a public repository."""
         }
     
     except Exception as e:
-        print(f"❌ Unexpected error: {e}")
         return {
             "approved": False,
             "confidence": "LOW",
@@ -930,9 +883,6 @@ if __name__ == "__main__":
                             cd ${VALIDATION_DIR}
                             chmod +x validate_with_bob.py
                             
-                            # Bob Shell uses a secret store for API keys (latest version)
-                            # The BOBSHELL_API_KEY environment variable is the primary way to provide the key
-                            
                             # Export environment variables for Bob Shell
                             export BOBSHELL_API_KEY="${BOB_API_KEY}"
                             export API_KEY="${BOB_API_KEY}"
@@ -942,18 +892,7 @@ if __name__ == "__main__":
                             export NODE_PATH="${NODE_PATH}"
                             export PATH="${PATH}"
                             
-                            # Debug: Check Bob authentication status
-                            echo "🔑 Checking Bob Shell authentication..."
-                            echo "   BOBSHELL_API_KEY is set: \${BOBSHELL_API_KEY:+YES}"
-                            
-                            if [ -f ~/.bob/settings.json ]; then
-                                echo "✅ Bob settings found at ~/.bob/settings.json"
-                            else
-                                echo "⚠️  Bob settings not found (will be created on first run)"
-                            fi
-                            
                             # Run validation
-                            # Bob will use BOBSHELL_API_KEY and store it in its secret store
                             python3 validate_with_bob.py pr_content.json
                         """,
                         returnStatus: true
