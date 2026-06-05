@@ -342,14 +342,20 @@ def collect_pr_content(base_branch):
     print("Extracting keywords for internet verification...")
     
     def extract_keywords(text):
-        """Extract potential keywords/identifiers from text"""
+        """Extract potential keywords/identifiers from text, excluding variable names"""
         import re
-        # Extract camelCase, snake_case, and UPPER_CASE identifiers
-        # Exclude common words and focus on technical terms
-        pattern = r'\\b[A-Z][a-z]+(?:[A-Z][a-z]+)+\\b|\\b[a-z]+_[a-z_]+\\b|\\b[A-Z]{2,}(?:_[A-Z]+)*\\b'
+        # Extract only UPPER_CASE constants and specific patterns that look like product names
+        # Exclude variable names (camelCase, snake_case)
+        pattern = r'\\b[A-Z]{2,}(?:_[A-Z]+)*\\b'
         keywords = re.findall(pattern, text)
-        # Filter out very common words
-        common_words = {'GET', 'POST', 'PUT', 'DELETE', 'HTTP', 'HTTPS', 'API', 'URL', 'JSON', 'XML'}
+        # Filter out very common words and programming terms
+        common_words = {
+            'GET', 'POST', 'PUT', 'DELETE', 'HTTP', 'HTTPS', 'API', 'URL', 'JSON', 'XML',
+            'HTML', 'CSS', 'SQL', 'REST', 'CRUD', 'UTF', 'ASCII', 'UUID', 'URI',
+            'TRUE', 'FALSE', 'NULL', 'NONE', 'ERROR', 'SUCCESS', 'FAIL', 'PASS',
+            'DEBUG', 'INFO', 'WARN', 'WARNING', 'TRACE', 'FATAL', 'CRITICAL',
+            'TODO', 'FIXME', 'NOTE', 'HACK', 'XXX', 'BUG', 'DEPRECATED'
+        }
         return [k for k in set(keywords) if k not in common_words and len(k) > 3]
     
     def check_keyword_on_internet(keyword):
