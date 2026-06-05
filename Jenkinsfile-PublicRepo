@@ -1102,52 +1102,57 @@ if __name__ == "__main__":
     
     post {
         always {
-            script {
-                echo "🧹 Cleaning up and archiving artifacts..."
-                
-                archiveArtifacts artifacts: 'bob-validation/**/*', allowEmptyArchive: true
-                
-                // publishHTML([
-                //     reportDir: 'bob-validation',
-                //     reportFiles: 'validation_report.html',
-                //     reportName: 'Bob Validation Report (Public Repo)',
-                //     keepAll: true,
-                //     alwaysLinkToLastBuild: true
-                // ])
+            node {
+                script {
+                    echo "🧹 Cleaning up and archiving artifacts..."
+                    
+                    archiveArtifacts artifacts: 'bob-validation/**/*', allowEmptyArchive: true
+                    
+                    // publishHTML([
+                    //     reportDir: 'bob-validation',
+                    //     reportFiles: 'validation_report.html',
+                    //     reportName: 'Bob Validation Report (Public Repo)',
+                    //     keepAll: true,
+                    //     alwaysLinkToLastBuild: true
+                    // ])
+                }
             }
         }
         
         success {
-            script {
-                echo "✅ Pipeline completed successfully!"
-                
-                if (env.CHANGE_ID) {
-                    sh """
-                        curl -X POST \
-                            -H "Authorization: token ${GITHUB_TOKEN}" \
-                            -H "Content-Type: application/json" \
-                            -d '{"state": "success", "context": "Bob Validation (Public Repo)", "description": "Content validated for public submission"}' \
-                            "https://api.github.com/repos/${IBM_FORK_REPO}/statuses/${env.GIT_COMMIT}"
-                    """
-                }
-                
-                if (env.PUBLIC_PR_URL) {
-                    echo "🎉 Public PR created: ${env.PUBLIC_PR_URL}"
+            node {
+                script {
+                    echo "✅ Pipeline completed successfully!"
+                    
+                    if (env.CHANGE_ID) {
+                        sh """
+                            curl -X POST \
+                                -H "Authorization: token ${GITHUB_TOKEN}" \
+                                -H "Content-Type: application/json" \
+                                -d '{"state": "success", "context": "Bob Validation (Public Repo)", "description": "Content validated for public submission"}' \
+                                "https://api.github.com/repos/${IBM_FORK_REPO}/statuses/${env.GIT_COMMIT}"
+                        """
+                    }
+                    
+                    if (env.PUBLIC_PR_URL) {
+                        echo "🎉 Public PR created: ${env.PUBLIC_PR_URL}"
+                    }
                 }
             }
         }
         
         failure {
-            script {
-                echo "❌ Pipeline failed!"
-                
-                if (env.CHANGE_ID) {
-                    sh """
-                        curl -X POST \
-                            -H "Authorization: token ${GITHUB_TOKEN}" \
-                            -H "Content-Type: application/json" \
-                            -d '{"state": "failure", "context": "Bob Validation (Public Repo)", "description": "Content validation failed - not safe for public submission"}' \
-                            "https://api.github.com/repos/${IBM_FORK_REPO}/statuses/${env.GIT_COMMIT}"
+            node {
+                script {
+                    echo "❌ Pipeline failed!"
+                    
+                    if (env.CHANGE_ID) {
+                        sh """
+                            curl -X POST \
+                                -H "Authorization: token ${GITHUB_TOKEN}" \
+                                -H "Content-Type: application/json" \
+                                -d '{"state": "failure", "context": "Bob Validation (Public Repo)", "description": "Content validation failed - not safe for public submission"}' \
+                                "https://api.github.com/repos/${IBM_FORK_REPO}/statuses/${env.GIT_COMMIT}"
                     """
                 }
                 
