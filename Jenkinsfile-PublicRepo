@@ -638,7 +638,7 @@ Be EXTRA strict because this is going to a public repository."""
         bob_path = os.getenv('BOB_SHELL_PATH', 'bob')
         node_path = os.getenv('NODE_PATH', 'node')
         bob_js_path = os.getenv('BOB_JS_PATH', '')
-        bob_api_key = os.getenv('BOB_API_KEY', '')
+        bob_api_key = os.getenv('BOB_API_KEY', '').strip()  # Strip whitespace
         
         if not bob_api_key:
             print("❌ ERROR: BOB_API_KEY environment variable is not set!")
@@ -667,32 +667,20 @@ Be EXTRA strict because this is going to a public repository."""
         print(f"🔧 Bob path: {bob_path}")
         print(f"🔧 Environment API_KEY is set: {'API_KEY' in bob_env}")
         
-        # Test Bob Shell authentication first with a simple command
-        print("🧪 Testing Bob Shell authentication...")
-        test_result = subprocess.run(
-            ['echo', 'test', '|', bob_path],
-            shell=True,
-            capture_output=True,
-            text=True,
-            timeout=10,
-            env=bob_env
-        )
-        
-        if test_result.returncode != 0:
-            print(f"⚠️  Bob Shell test failed: {test_result.stderr}")
-        else:
-            print("✅ Bob Shell authentication test passed")
-        
         # Bob is a Node.js script, so we can call it directly or via node
         # Try direct execution first (if bob is executable and in PATH)
         # If that fails, try running via node explicitly
         
-        # Method 1: Try direct execution with prompt via stdin (like terminal usage)
-        # This matches how you use it: echo "prompt" | bob
+        # Method 1: Use the working format from tests: bob --output-format json --chat-mode code
+        # Pass prompt as command line argument (Test 6 format)
         try:
             result = subprocess.run(
-                [bob_path],
-                input=prompt,
+                [
+                    bob_path,
+                    '--output-format', 'json',
+                    '--chat-mode', 'code',
+                    prompt
+                ],
                 capture_output=True,
                 text=True,
                 timeout=120,
@@ -708,8 +696,13 @@ Be EXTRA strict because this is going to a public repository."""
             print(f"Direct execution failed ({e}), trying with explicit node...")
             if bob_js_path and os.path.exists(bob_js_path):
                 result = subprocess.run(
-                    [node_path, bob_js_path],
-                    input=prompt,
+                    [
+                        node_path,
+                        bob_js_path,
+                        '--output-format', 'json',
+                        '--chat-mode', 'code',
+                        prompt
+                    ],
                     capture_output=True,
                     text=True,
                     timeout=120,
@@ -718,8 +711,12 @@ Be EXTRA strict because this is going to a public repository."""
             else:
                 # Fallback: try with just 'bob' in PATH
                 result = subprocess.run(
-                    ['bob'],
-                    input=prompt,
+                    [
+                        'bob',
+                        '--output-format', 'json',
+                        '--chat-mode', 'code',
+                        prompt
+                    ],
                     capture_output=True,
                     text=True,
                     timeout=120,
