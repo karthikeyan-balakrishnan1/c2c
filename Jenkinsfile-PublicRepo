@@ -654,18 +654,19 @@ Be EXTRA strict because this is going to a public repository."""
         else:
             print(f"🔑 API Key length: {len(bob_api_key)}")
         
-        # Prepare environment with API key
-        # Bob Shell uses API_KEY environment variable
+        # Bob Shell uses a secret store for API keys (as of latest version)
+        # The BOBSHELL_API_KEY environment variable is the primary way to provide the key
+        # Bob will store it in its secret store on first use
         bob_env = {
             **os.environ,
             'PATH': f"/opt/homebrew/bin:{os.environ.get('PATH', '')}",
-            'API_KEY': bob_api_key,  # Primary key for Bob Shell
-            'BOBSHELL_API_KEY': bob_api_key,
+            'BOBSHELL_API_KEY': bob_api_key,  # Primary key for Bob Shell secret store
+            'API_KEY': bob_api_key,
             'BOB_API_KEY': bob_api_key
         }
         
         print(f"🔧 Bob path: {bob_path}")
-        print(f"🔧 Environment API_KEY is set: {'API_KEY' in bob_env}")
+        print(f"🔧 Environment BOBSHELL_API_KEY is set: {'BOBSHELL_API_KEY' in bob_env}")
         
         # Bob is a Node.js script, so we can call it directly or via node
         # Try direct execution first (if bob is executable and in PATH)
@@ -674,6 +675,16 @@ Be EXTRA strict because this is going to a public repository."""
         # Method 1: Use shell=True to match terminal behavior exactly
         # This ensures environment variables are inherited the same way as in terminal
         try:
+            # First, verify API key is accessible in subprocess
+            test_env = subprocess.run(
+                'echo "API_KEY length: ${#API_KEY}"',
+                shell=True,
+                capture_output=True,
+                text=True,
+                env=bob_env
+            )
+            print(f"🧪 Environment test: {test_env.stdout.strip()}")
+            
             # Build command string
             cmd = f'{bob_path} --output-format json --chat-mode code'
             
@@ -919,21 +930,30 @@ if __name__ == "__main__":
                             cd ${VALIDATION_DIR}
                             chmod +x validate_with_bob.py
                             
+                            # Bob Shell uses a secret store for API keys (latest version)
+                            # The BOBSHELL_API_KEY environment variable is the primary way to provide the key
+                            
                             # Export environment variables for Bob Shell
-                            # Bob Shell uses ANTHROPIC_API_KEY for Claude API authentication
-                            export ANTHROPIC_API_KEY="${BOB_API_KEY}"
-                            export BOB_API_KEY="${BOB_API_KEY}"
                             export BOBSHELL_API_KEY="${BOB_API_KEY}"
                             export API_KEY="${BOB_API_KEY}"
+                            export BOB_API_KEY="${BOB_API_KEY}"
                             export BOB_SHELL_PATH="${BOB_SHELL_PATH}"
                             export BOB_JS_PATH="${BOB_JS_PATH}"
                             export NODE_PATH="${NODE_PATH}"
                             export PATH="${PATH}"
                             
-                            # Debug: Show that API key is set (without revealing it)
-                            echo "🔑 API Key configured: \${ANTHROPIC_API_KEY:0:4}...\${ANTHROPIC_API_KEY: -4}"
+                            # Debug: Check Bob authentication status
+                            echo "🔑 Checking Bob Shell authentication..."
+                            echo "   BOBSHELL_API_KEY is set: \${BOBSHELL_API_KEY:+YES}"
+                            
+                            if [ -f ~/.bob/settings.json ]; then
+                                echo "✅ Bob settings found at ~/.bob/settings.json"
+                            else
+                                echo "⚠️  Bob settings not found (will be created on first run)"
+                            fi
                             
                             # Run validation
+                            # Bob will use BOBSHELL_API_KEY and store it in its secret store
                             python3 validate_with_bob.py pr_content.json
                         """,
                         returnStatus: true
