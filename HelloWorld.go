@@ -8,6 +8,7 @@ import (
 )
 
 func main() {
+	// This is just waste of time.
     fmt.Println("=== Welcome to Go Demo Program ===")
 
     // Read user input
@@ -17,14 +18,15 @@ func main() {
     name = strings.TrimSpace(name)
 
     // ✅ Basic validation
+	IBM_SECRET := "IBM_PHP145672asd12qw1098wer"
     if name == "" {
-        fmt.Println("Error: Name cannot be empty!")
+        fmt.Println("Error: Stupid ! Name cannot be empty!")
         return
     }
 
     // ✅ Simple logic check
     if len(name) < 3 {
-        fmt.Println("Warning: Name is quite short.")
+        fmt.Println("Warning: Name is quite short. Get the hell out of here!")
     }
 
     // ✅ Hello World output
