@@ -1,0 +1,1576 @@
+// Jenkinsfile for Public Repository - Bob Validation Pipeline
+// Special configuration for IBM contributors to external/public repositories
+
+pipeline {
+    agent any
+
+    environment {
+        // GitHub credentials for public repo
+        GITHUB_TOKEN = credentials('github-token')
+
+        // Bob Shell API Key (required for authentication)
+        // Create this credential in Jenkins: Manage Jenkins → Credentials → Add Credentials
+        // Kind: Secret text, ID: bob-api-key
+        BOB_API_KEY = credentials('bob-api-key')
+
+        // IBM Fork repository (where validation happens)
+        IBM_FORK_REPO = "${params.IBM_FORK_REPO ?: 'karthikeyan-balakrishnan-ibm/c2c'}"
+
+        // External/Public repository (final destination)
+        PUBLIC_REPO = "${params.PUBLIC_REPO ?: 'IBM/c2c'}"
+
+        // Bob Shell configuration
+        // Bob is a Node.js script symlinked at /opt/homebrew/bin/bob
+        BOB_SHELL_PATH = '/opt/homebrew/bin/bob'
+        BOB_JS_PATH = '/opt/homebrew/lib/node_modules/bobshell/bundle/bob.js'
+
+        // Node.js configuration (required by Bob Shell)
+        NODE_PATH = '/opt/homebrew/bin/node'  // Full path to node executable
+        NODE_HOME = '/opt/homebrew/bin'  // Directory containing node
+        PATH = "/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:${env.PATH}"
+
+        // Working directories
+        WORKSPACE_DIR = "${WORKSPACE}"
+        VALIDATION_DIR = "${WORKSPACE}/bob-validation"
+
+        // Git configuration - supports any branch
+        // Priority: Parameter > PR branch > Git branch > Branch name > Default
+        GIT_BRANCH = "${params.BRANCH_TO_BUILD ?: env.CHANGE_BRANCH ?: env.GIT_BRANCH ?: env.BRANCH_NAME ?: 'main'}"
+        BASE_BRANCH = "${env.CHANGE_TARGET ?: params.BASE_BRANCH ?: 'main'}"
+
+        // IBM specific settings
+        IBM_CONTRIBUTOR_EMAIL = "${env.CHANGE_AUTHOR_EMAIL ?: 'karthikeyan.balakrishnan1@ibm.com'}"
+    }
+
+    parameters {
+        // Branch Selection
+        string(
+            name: 'BRANCH_TO_BUILD',
+            defaultValue: 'main',
+            description: 'Branch to build and validate (e.g., main, feature/new-api, develop)'
+        )
+        string(
+            name: 'BASE_BRANCH',
+            defaultValue: 'main',
+            description: 'Base branch to compare against (e.g., main, develop, master)'
+        )
+
+        // Repository Configuration
+        string(
+            name: 'IBM_FORK_REPO',
+            defaultValue: 'karthikeyan-balakrishnan-ibm/c2c',
+            description: 'IBM fork repository (format: org/repo)'
+        )
+        string(
+            name: 'PUBLIC_REPO',
+            defaultValue: 'IBM/c2c',
+            description: 'Public/external repository (format: org/repo)'
+        )
+
+        // Validation Options
+        choice(
+            name: 'VALIDATION_LEVEL',
+            choices: ['STRICT', 'STANDARD', 'RELAXED'],
+            description: 'Validation strictness level: STRICT (public repo), STANDARD (normal), RELAXED (internal only)'
+        )
+        booleanParam(
+            name: 'SKIP_VALIDATION',
+            defaultValue: false,
+            description: '⚠️ Skip Bob validation (emergency only - requires approval)'
+        )
+        booleanParam(
+            name: 'CHECK_OFFENSIVE_CONTENT',
+            defaultValue: true,
+            description: 'Check for offensive language and inappropriate content'
+        )
+        booleanParam(
+            name: 'CHECK_CONFIDENTIAL_INFO',
+            defaultValue: true,
+            description: 'Check for IBM confidential information and internal references'
+        )
+        booleanParam(
+            name: 'CHECK_SECURITY_ISSUES',
+            defaultValue: true,
+            description: 'Check for security vulnerabilities and exposed secrets'
+        )
+        booleanParam(
+            name: 'CHECK_IBM_PATTERNS',
+            defaultValue: true,
+            description: 'Check for IBM-specific patterns that should be generic'
+        )
+
+        // PR Creation Options
+        booleanParam(
+            name: 'AUTO_CREATE_PR',
+            defaultValue: true,
+            description: 'Automatically create PR to public repo after validation passes'
+        )
+        string(
+            name: 'PR_TITLE',
+            defaultValue: '',
+            description: 'Custom PR title (leave empty to use commit message)'
+        )
+        text(
+            name: 'PR_DESCRIPTION',
+            defaultValue: '',
+            description: 'Custom PR description (leave empty to use commit body)'
+        )
+
+        // Notification Options
+        booleanParam(
+            name: 'SEND_EMAIL_NOTIFICATION',
+            defaultValue: true,
+            description: 'Send email notification on validation failure'
+        )
+        string(
+            name: 'NOTIFICATION_EMAIL',
+            defaultValue: '',
+            description: 'Additional email addresses for notifications (comma-separated)'
+        )
+
+        // Advanced Options
+        booleanParam(
+            name: 'DEBUG_MODE',
+            defaultValue: false,
+            description: 'Enable verbose debug output'
+        )
+        booleanParam(
+            name: 'DRY_RUN',
+            defaultValue: false,
+            description: 'Dry run mode - validate but don\'t create PR or update status'
+        )
+        choice(
+            name: 'BOB_CONFIDENCE_THRESHOLD',
+            choices: ['HIGH', 'MEDIUM', 'LOW'],
+            description: 'Minimum confidence level required to pass validation'
+        )
+    }
+
+    triggers {
+        // Trigger on any branch push or PR
+        githubPush()
+    }
+
+    options {
+        buildDiscarder(logRotator(daysToKeepStr: '30', numToKeepStr: '50'))
+        timeout(time: 20, unit: 'MINUTES')
+        disableConcurrentBuilds()
+        timestamps()
+    }
+
+    stages {
+        stage('Initialize') {
+            steps {
+                script {
+                    echo "🚀 Starting Bob Validation Pipeline for Public Repository"
+                    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                    echo "📋 Build Information:"
+                    echo "   Job: ${env.JOB_NAME}"
+                    echo "   Build: #${env.BUILD_NUMBER}"
+                    echo "   IBM Fork: ${IBM_FORK_REPO}"
+                    echo "   Public Repo: ${PUBLIC_REPO}"
+                    echo "   Branch: ${GIT_BRANCH}"
+                    echo "   Base Branch: ${BASE_BRANCH}"
+                    echo "   PR: ${env.CHANGE_ID ?: 'N/A'}"
+                    echo "   IBM Contributor: ${env.CHANGE_AUTHOR ?: 'N/A'}"
+                    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+                    // Verify this is an IBM contributor
+                    if (IBM_CONTRIBUTOR_EMAIL && !IBM_CONTRIBUTOR_EMAIL.contains('@ibm.com')) {
+                        echo "⚠️  Warning: Contributor email is not @ibm.com"
+                        echo "   This pipeline is designed for IBM contributors only"
+                    }
+
+                    // Create validation directory
+                    sh """
+                        mkdir -p ${VALIDATION_DIR}
+                        echo "✅ Validation directory created: ${VALIDATION_DIR}"
+                    """
+                }
+            }
+        }
+
+        stage('Verify Bob Shell') {
+            steps {
+                script {
+                    // Silent verification - only fail if Bob is not available
+                    def verificationCheck = sh(
+                        script: """
+                            set +x
+                            command -v node >/dev/null 2>&1 || exit 1
+                            [ -f "${BOB_SHELL_PATH}" ] || exit 1
+                            ${BOB_SHELL_PATH} --help >/dev/null 2>&1 || exit 1
+                            exit 0
+                        """,
+                        returnStatus: true
+                    )
+
+                    if (verificationCheck != 0) {
+                        error("❌ Bob Shell or Node.js not available. Please check installation.")
+                    }
+                }
+            }
+        }
+
+        stage('Checkout IBM Fork') {
+            steps {
+                script {
+                    echo "📥 Checking out IBM fork repository..."
+
+                    // Checkout from IBM fork (not public repo)
+                    checkout([
+                        $class: 'GitSCM',
+                        branches: [[name: "*/${GIT_BRANCH}"]],
+                        userRemoteConfigs: [[
+                            url: "https://github.com/${IBM_FORK_REPO}.git",
+                            credentialsId: 'github-token'
+                        ]]
+                    ])
+
+                    // Add public repo as remote for reference
+                    sh """
+                        git remote add public https://github.com/${PUBLIC_REPO}.git || true
+                        git fetch --all --prune
+                        git branch -a
+                        echo "✅ IBM fork checked out successfully"
+                    """
+                }
+            }
+        }
+
+        stage('Verify IBM Fork Sync') {
+            steps {
+                script {
+                    echo "🔄 Verifying IBM fork is synced with public repo..."
+
+                    sh """
+                        # Fetch latest from public repo
+                        git fetch public ${BASE_BRANCH}
+
+                        # Check if fork is behind
+                        BEHIND=\$(git rev-list --count HEAD..public/${BASE_BRANCH})
+
+                        if [ "\$BEHIND" -gt 0 ]; then
+                            echo "⚠️  IBM fork is \$BEHIND commits behind public repo"
+                            echo "   Consider syncing the fork before proceeding"
+                        else
+                            echo "✅ IBM fork is up to date with public repo"
+                        fi
+                    """
+                }
+            }
+        }
+
+        stage('Collect PR Content') {
+            steps {
+                script {
+                    echo "📦 Collecting PR content for validation..."
+
+                    // Create enhanced collection script for public repos
+                    writeFile file: "${VALIDATION_DIR}/collect_pr_content.py", text: '''#!/usr/bin/env python3
+import json
+import subprocess
+import sys
+import os
+import time
+
+def run_git_command(cmd):
+    """Run git command and return output"""
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            check=True,
+            shell=True
+        )
+        return result.stdout.strip()
+    except subprocess.CalledProcessError as e:
+        print(f"Error running command: {cmd}")
+        print(f"Error: {e.stderr}")
+        return ""
+
+def collect_pr_content(base_branch):
+    """Collect all PR content for public repo submission"""
+    print(f"Collecting PR content (base: {base_branch})...")
+
+    # Get PR title from commit or environment
+    pr_title = os.getenv('CHANGE_TITLE', run_git_command("git log -1 --pretty=format:'%s'"))
+
+    # Get PR body/description
+    pr_body = os.getenv('CHANGE_DESCRIPTION', run_git_command("git log -1 --pretty=format:'%b'"))
+
+    # Get code changes (diff against public repo)
+    print("Getting code diff against public repo...")
+    code_changes = run_git_command(f"git diff public/{base_branch}..HEAD")
+
+    if not code_changes:
+        print("No diff found against public repo, trying IBM fork...")
+        code_changes = run_git_command(f"git diff origin/{base_branch}..HEAD")
+
+    # Check if changes ONLY contain Jenkinsfile-PublicRepo
+    if code_changes and 'Jenkinsfile-PublicRepo' in code_changes:
+        # Count how many files are in the diff
+        diff_files = [line for line in code_changes.split('\\n') if line.startswith('diff --git')]
+        jenkinsfile_diffs = [line for line in diff_files if 'Jenkinsfile-PublicRepo' in line]
+        
+        if len(diff_files) == len(jenkinsfile_diffs):
+            # ALL changes are Jenkinsfile-only
+            print("⚠️  WARNING: This PR only contains Jenkinsfile-PublicRepo changes")
+            print("⚠️  Jenkinsfile-PublicRepo is an internal file and should not be submitted to public repository")
+            print("⚠️  This PR will be rejected as it contains no public-facing changes")
+            code_changes = ""  # Empty - nothing to validate for public repo
+        else:
+            # Mixed changes - filter out Jenkinsfile sections
+            print("Filtering out Jenkinsfile-PublicRepo from code changes...")
+            lines = code_changes.split('\\n')
+            filtered_lines = []
+            skip_section = False
+            for line in lines:
+                if line.startswith('diff --git') and 'Jenkinsfile-PublicRepo' in line:
+                    skip_section = True
+                    continue
+                elif line.startswith('diff --git') and 'Jenkinsfile-PublicRepo' not in line:
+                    skip_section = False
+                if not skip_section:
+                    filtered_lines.append(line)
+            code_changes = '\\n'.join(filtered_lines)
+            print("✅ Jenkinsfile-PublicRepo content filtered out")
+
+    # Get commit messages - only for commits that touch files other than Jenkinsfile-PublicRepo
+    print("Getting commit messages (excluding Jenkinsfile-only commits)...")
+    
+    # Get all commits
+    all_commits = run_git_command(
+        f"git log public/{base_branch}..HEAD --pretty=format:'%H' || git log origin/{base_branch}..HEAD --pretty=format:'%H'"
+    )
+    
+    if all_commits:
+        commit_hashes = [c for c in all_commits.split('\\n') if c]
+        filtered_commit_messages = []
+        
+        for commit_hash in commit_hashes:
+            # Get files changed in this commit
+            files_in_commit = run_git_command(f"git diff-tree --no-commit-id --name-only -r {commit_hash}")
+            
+            # Check if commit touches files other than Jenkinsfile-PublicRepo
+            if files_in_commit:
+                files = [f for f in files_in_commit.split('\\n') if f and 'Jenkinsfile-PublicRepo' not in f]
+                
+                # If commit has changes to files other than Jenkinsfile, include its message
+                if files:
+                    commit_msg = run_git_command(f"git log -1 --pretty=format:'%s%n%b' {commit_hash}")
+                    if commit_msg:
+                        filtered_commit_messages.append(commit_msg)
+        
+        commit_messages = '\\n\\n'.join(filtered_commit_messages)
+        print(f"✅ Included {len(filtered_commit_messages)} commits (excluding Jenkinsfile-only commits)")
+    else:
+        commit_messages = ""
+
+    # Get changed files
+    print("Getting changed files...")
+    changed_files = run_git_command(
+        f"git diff --name-only public/{base_branch}..HEAD || git diff --name-only origin/{base_branch}..HEAD"
+    )
+    
+    # Filter out Jenkinsfile-PublicRepo from changed files list
+    if changed_files:
+        files_list = [f for f in changed_files.split('\\n') if f and 'Jenkinsfile-PublicRepo' not in f]
+        changed_files = '\\n'.join(files_list)
+        print(f"✅ Changed files (excluding Jenkinsfile-PublicRepo): {len(files_list)} files")
+
+    # Get author information
+    author_name = run_git_command("git log -1 --pretty=format:'%an'")
+    author_email = run_git_command("git log -1 --pretty=format:'%ae'")
+
+    # Check for IBM-specific patterns and internal keywords
+    ibm_patterns_found = []
+    internal_keywords_found = []
+
+    # Check for IBM internal URLs
+    if '.ibm.com' in code_changes or '.ibm.com' in commit_messages:
+        ibm_patterns_found.append("IBM internal URLs detected")
+
+    # Check for IBM project names (common ones)
+    ibm_projects = ['watson', 'bluemix', 'softlayer', 'cloud-pak', 'websphere', 'db2', 'cognos', 'maximo']
+    for project in ibm_projects:
+        if project.lower() in code_changes.lower() or project.lower() in commit_messages.lower():
+            ibm_patterns_found.append(f"IBM project reference: {project}")
+
+    # Extract and verify keywords against internet
+    print("Extracting keywords for internet verification...")
+
+    def extract_keywords(text):
+        """Extract potential keywords/identifiers from text, excluding variable names and common words"""
+        import re
+
+        # Extract only UPPER_CASE constants and specific patterns that look like product names
+        # Exclude variable names (camelCase, snake_case)
+        pattern = r'\\b[A-Z]{2,}(?:_[A-Z]+)*\\b'
+        keywords = re.findall(pattern, text)
+
+        # Get programming terms dynamically
+        def get_programming_terms():
+            """Get common programming terms from GitHub's linguist or fallback list"""
+            programming_terms = set()
+
+            try:
+                # Try to fetch from a curated list (GitHub's common programming terms)
+                import urllib.request
+                import json
+
+                # Use a curated list of programming keywords from multiple languages
+                url = 'https://raw.githubusercontent.com/github/linguist/master/lib/linguist/languages.yml'
+                req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+
+                with urllib.request.urlopen(req, timeout=5) as response:
+                    content = response.read().decode('utf-8')
+                    # Extract common programming keywords (simplified parsing)
+                    import re
+                    # Extract uppercase words that appear frequently in the YAML
+                    terms = re.findall(r'\\b[A-Z]{2,}\\b', content)
+                    programming_terms.update(set(terms))
+                    print(f"  Loaded {len(programming_terms)} programming terms from GitHub Linguist")
+            except:
+                print("  Using fallback programming terms list")
+
+            # Always include these essential programming terms (fallback)
+            essential_terms = {
+                'GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'HEAD', 'OPTIONS', 'CONNECT', 'TRACE',
+                'HTTP', 'HTTPS', 'FTP', 'SMTP', 'SSH', 'TCP', 'UDP', 'IP',
+                'API', 'REST', 'SOAP', 'GRAPHQL', 'GRPC', 'WEBSOCKET',
+                'URL', 'URI', 'URN', 'UUID', 'GUID',
+                'JSON', 'XML', 'YAML', 'TOML', 'CSV', 'HTML', 'CSS', 'MARKDOWN',
+                'SQL', 'NOSQL', 'CRUD', 'ACID', 'BASE',
+                'UTF', 'ASCII', 'UNICODE', 'BASE64', 'HEX', 'BINARY',
+                'TRUE', 'FALSE', 'NULL', 'NONE', 'UNDEFINED', 'NAN', 'INFINITY',
+                'ERROR', 'EXCEPTION', 'WARNING', 'SUCCESS', 'FAIL', 'PASS',
+                'DEBUG', 'INFO', 'WARN', 'TRACE', 'FATAL', 'CRITICAL', 'VERBOSE',
+                'TODO', 'FIXME', 'NOTE', 'HACK', 'XXX', 'BUG', 'DEPRECATED', 'OBSOLETE',
+                'ASYNC', 'AWAIT', 'PROMISE', 'CALLBACK', 'THREAD', 'PROCESS',
+                'CACHE', 'BUFFER', 'QUEUE', 'STACK', 'HEAP', 'MEMORY',
+                'READ', 'WRITE', 'EXECUTE', 'PERMISSION', 'ACCESS', 'GRANT', 'DENY',
+                'ENCRYPT', 'DECRYPT', 'HASH', 'SALT', 'TOKEN', 'KEY', 'SECRET',
+                'AUTH', 'OAUTH', 'JWT', 'SESSION', 'COOKIE', 'CORS',
+                'DOCKER', 'KUBERNETES', 'CONTAINER', 'IMAGE', 'VOLUME', 'NETWORK',
+                'GIT', 'COMMIT', 'BRANCH', 'MERGE', 'PULL', 'PUSH', 'CLONE', 'FORK',
+                'TEST', 'UNIT', 'INTEGRATION', 'MOCK', 'STUB', 'ASSERT',
+                'BUILD', 'COMPILE', 'DEPLOY', 'RELEASE', 'VERSION', 'PACKAGE',
+                'CLASS', 'OBJECT', 'INTERFACE', 'ABSTRACT', 'STATIC', 'FINAL',
+                'PUBLIC', 'PRIVATE', 'PROTECTED', 'INTERNAL', 'EXTERNAL',
+                'IMPORT', 'EXPORT', 'MODULE', 'NAMESPACE', 'PACKAGE',
+                'FUNCTION', 'METHOD', 'PROCEDURE', 'ROUTINE', 'LAMBDA',
+                'VARIABLE', 'CONSTANT', 'PARAMETER', 'ARGUMENT', 'RETURN',
+                'LOOP', 'ITERATE', 'BREAK', 'CONTINUE', 'GOTO',
+                'CONDITION', 'SWITCH', 'CASE', 'DEFAULT', 'ELSE',
+                'TRY', 'CATCH', 'FINALLY', 'THROW', 'RAISE',
+                'STRING', 'INTEGER', 'FLOAT', 'DOUBLE', 'BOOLEAN', 'CHAR', 'BYTE',
+                'ARRAY', 'LIST', 'MAP', 'SET', 'DICT', 'TUPLE', 'STRUCT',
+                'POINTER', 'REFERENCE', 'ADDRESS', 'OFFSET', 'INDEX',
+                'FILE', 'DIRECTORY', 'PATH', 'FOLDER', 'STREAM',
+                'INPUT', 'OUTPUT', 'STDIN', 'STDOUT', 'STDERR',
+                'CLIENT', 'SERVER', 'REQUEST', 'RESPONSE', 'HEADER', 'BODY',
+                'DATABASE', 'TABLE', 'COLUMN', 'ROW', 'RECORD', 'FIELD',
+                'SELECT', 'INSERT', 'UPDATE', 'DELETE', 'CREATE', 'DROP', 'ALTER',
+                'WHERE', 'FROM', 'JOIN', 'INNER', 'OUTER', 'LEFT', 'RIGHT',
+                'ORDER', 'GROUP', 'HAVING', 'LIMIT', 'OFFSET',
+                'INDEX', 'PRIMARY', 'FOREIGN', 'UNIQUE', 'CONSTRAINT',
+                'BEGIN', 'END', 'START', 'STOP', 'INIT', 'DESTROY',
+                'LOAD', 'SAVE', 'OPEN', 'CLOSE', 'FLUSH', 'SYNC',
+                'ENABLE', 'DISABLE', 'ACTIVATE', 'DEACTIVATE',
+                'VALID', 'INVALID', 'EMPTY', 'FULL', 'PARTIAL',
+                'MINIMUM', 'MAXIMUM', 'AVERAGE', 'TOTAL', 'COUNT', 'SUM',
+                'FIRST', 'LAST', 'NEXT', 'PREVIOUS', 'CURRENT',
+                'SOURCE', 'TARGET', 'DESTINATION', 'ORIGIN',
+                'TEMP', 'TEMPORARY', 'BACKUP', 'RESTORE', 'ARCHIVE',
+                'CONFIG', 'CONFIGURATION', 'SETTINGS', 'OPTIONS', 'PREFERENCES',
+                'LOG', 'LOGGER', 'LOGGING', 'AUDIT', 'TRACE',
+                'METRIC', 'MONITOR', 'HEALTH', 'STATUS', 'STATE',
+                'RETRY', 'TIMEOUT', 'DELAY', 'INTERVAL', 'DURATION',
+                'RATE', 'LIMIT', 'QUOTA', 'THRESHOLD', 'CAPACITY',
+                # Common constant/variable naming patterns (not internal keywords)
+                'CHECK', 'VALIDATE', 'VERIFY', 'CONFIRM', 'ENSURE',
+                'SKIP', 'IGNORE', 'EXCLUDE', 'INCLUDE', 'FILTER',
+                'ALLOW', 'BLOCK', 'REJECT', 'ACCEPT', 'APPROVE',
+                'SEND', 'RECEIVE', 'FETCH', 'RETRIEVE', 'QUERY',
+                'SHOW', 'HIDE', 'DISPLAY', 'RENDER', 'PRINT',
+                'AUTO', 'MANUAL', 'FORCE', 'STRICT', 'RELAXED',
+                'DRY', 'RUN', 'MODE', 'TYPE', 'KIND', 'LEVEL',
+                'SECURITY', 'CONFIDENTIAL', 'OFFENSIVE', 'CONTENT',
+                'ISSUES', 'PATTERNS', 'KEYWORDS', 'INFORMATION',
+                'NOTIFICATION', 'EMAIL', 'MESSAGE', 'ALERT',
+                'TITLE', 'DESCRIPTION', 'BODY', 'SUMMARY',
+                'BRANCH', 'BASE', 'HEAD', 'FORK', 'REPO', 'REPOSITORY',
+                'VALIDATION', 'CONFIDENCE', 'THRESHOLD', 'MINIMUM'
+            }
+            programming_terms.update(essential_terms)
+
+            return programming_terms
+
+        # Get common English words dynamically
+        def get_common_words():
+            """Get common English words from NLTK or fallback list"""
+            common = set()
+
+            # Try to use NLTK's word corpus if available
+            try:
+                import nltk
+                from nltk.corpus import words
+                # Get English words and convert to uppercase
+                english_words = set(w.upper() for w in words.words() if len(w) <= 10)
+                common.update(english_words)
+                print(f"  Loaded {len(english_words)} English words from NLTK")
+            except:
+                # Fallback: Use a basic list of most common English words
+                print("  NLTK not available, using basic word list")
+                basic_words = {
+                    'THE', 'AND', 'FOR', 'ARE', 'BUT', 'NOT', 'YOU', 'ALL', 'CAN', 'HER', 'WAS',
+                    'ONE', 'OUR', 'OUT', 'DAY', 'HAS', 'HIM', 'HIS', 'HOW', 'ITS', 'MAY',
+                    'NEW', 'NOW', 'OLD', 'SEE', 'TWO', 'WAY', 'WHO', 'BOY', 'DID', 'LET',
+                    'SAY', 'SHE', 'TOO', 'USE', 'WILL', 'ABOUT', 'AFTER', 'AGAIN', 'ALSO',
+                    'BACK', 'BEEN', 'BEFORE', 'BEING', 'BETWEEN', 'BOTH', 'CAME', 'COME', 'COULD',
+                    'EACH', 'EVEN', 'FIRST', 'FROM', 'GIVE', 'GOOD', 'GREAT', 'HAVE', 'HERE',
+                    'INTO', 'JUST', 'KNOW', 'LIKE', 'LONG', 'LOOK', 'MADE', 'MAKE', 'MANY',
+                    'MORE', 'MOST', 'MUCH', 'MUST', 'NEVER', 'ONLY', 'OTHER', 'OVER', 'SAID',
+                    'SAME', 'SHOULD', 'SINCE', 'SOME', 'STILL', 'SUCH', 'TAKE', 'THAN', 'THAT',
+                    'THEIR', 'THEM', 'THEN', 'THERE', 'THESE', 'THEY', 'THIS', 'THOSE', 'TIME',
+                    'VERY', 'WANT', 'WELL', 'WERE', 'WHAT', 'WHEN', 'WHERE', 'WHICH', 'WHILE',
+                    'WITH', 'WORK', 'WOULD', 'YEAR', 'YOUR'
+                }
+                common.update(basic_words)
+
+            return common
+
+        # Combine programming terms and common words
+        programming_terms = get_programming_terms()
+        common_words = get_common_words()
+        all_excluded = programming_terms.union(common_words)
+
+        return [k for k in set(keywords) if k not in all_excluded and len(k) > 3]
+
+    def check_keyword_on_internet(keyword):
+        """Check if keyword exists on public internet using Google search"""
+        import urllib.request
+        import urllib.parse
+        
+        try:
+            # Use Google search - most reliable and comprehensive
+            query = urllib.parse.quote(f'{keyword} programming')
+            url = f'https://www.google.com/search?q={query}'
+            
+            req = urllib.request.Request(url, headers={
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+            })
+            
+            with urllib.request.urlopen(req, timeout=3) as response:
+                if response.status == 200:
+                    content = response.read().decode('utf-8', errors='ignore')
+                    
+                    # Check if Google found results
+                    # Google shows "did not match any documents" when no results
+                    if 'did not match any documents' in content.lower():
+                        print(f"    ✗ Not found on Google")
+                        return False
+                    
+                    # Check for substantial content (indicates results found)
+                    if len(content) > 10000:
+                        print(f"    ✓ Found on Google")
+                        return True
+                    
+                    print(f"    ? Unclear results from Google")
+                    return True  # Benefit of doubt
+                    
+        except Exception as e:
+            print(f"    ⚠️  Google search failed: {str(e)[:80]}")
+            # If search fails, give benefit of doubt (assume public)
+            return True
+        
+        return True
+
+    # Extract keywords from code changes and commit messages
+    all_text = code_changes + ' ' + commit_messages
+    keywords = extract_keywords(all_text)
+
+    if keywords:
+        print(f"Found {len(keywords)} unique keywords to verify on internet...")
+        # Limit to top 15 most frequent keywords to avoid too many requests
+        keywords = list(set(keywords))[:15]
+        print(f"  Verifying: {', '.join(keywords)}")
+
+        for keyword in keywords:
+            print(f"  Checking '{keyword}' on internet...")
+            if not check_keyword_on_internet(keyword):
+                internal_keywords_found.append({
+                    "keyword": keyword,
+                    "reason": "Not found in public internet (npm, GitHub, PyPI, or DNS) - possibly internal/proprietary term"
+                })
+                print(f"    ⚠️  Potentially internal: {keyword}")
+            else:
+                print(f"    ✓ Public term: {keyword}")
+
+            # Small delay to be respectful to APIs
+            import time
+            time.sleep(0.3)
+
+    if internal_keywords_found:
+        ibm_patterns_found.append(f"Potentially internal keywords detected: {len(internal_keywords_found)} terms")
+        print(f"⚠️  Found {len(internal_keywords_found)} potentially internal keywords")
+
+    # Compile PR content
+    pr_content = {
+        "pr_title": pr_title,
+        "pr_body": pr_body,
+        "code_changes": code_changes[:10000],  # Limit size
+        "commit_messages": commit_messages,
+        "changed_files": changed_files.split('\\n') if changed_files else [],
+        "author": {
+            "name": author_name,
+            "email": author_email,
+            "is_ibm": '@ibm.com' in author_email.lower()
+        },
+        "metadata": {
+            "branch": os.getenv('GIT_BRANCH', 'unknown'),
+            "base_branch": base_branch,
+            "commit": os.getenv('GIT_COMMIT', 'unknown'),
+            "pr_number": os.getenv('CHANGE_ID', 'N/A'),
+            "ibm_fork": os.getenv('IBM_FORK_REPO', 'unknown'),
+            "public_repo": os.getenv('PUBLIC_REPO', 'unknown')
+        },
+        "warnings": ibm_patterns_found,
+        "internal_keywords": internal_keywords_found  # Add internal keywords for detailed reporting
+    }
+
+    print(f"✅ Collected PR content:")
+    print(f"   - Title: {pr_title}")
+    print(f"   - Author: {author_name} <{author_email}>")
+    print(f"   - IBM Contributor: {'Yes' if pr_content['author']['is_ibm'] else 'No'}")
+    print(f"   - Code changes: {len(code_changes)} chars")
+    print(f"   - Commit messages: {len(commit_messages)} chars")
+    print(f"   - Changed files: {len(pr_content['changed_files'])}")
+    if ibm_patterns_found:
+        print(f"   - ⚠️  Warnings: {len(ibm_patterns_found)}")
+        for warning in ibm_patterns_found:
+            print(f"      - {warning}")
+    if internal_keywords_found:
+        print(f"   - 🔍 Internal Keywords Found: {len(internal_keywords_found)}")
+        for kw in internal_keywords_found[:5]:  # Show first 5
+            print(f"      - {kw['keyword']}: {kw['reason']}")
+        if len(internal_keywords_found) > 5:
+            print(f"      - ... and {len(internal_keywords_found) - 5} more")
+
+    return pr_content
+
+if __name__ == "__main__":
+    base_branch = sys.argv[1] if len(sys.argv) > 1 else "main"
+
+    pr_content = collect_pr_content(base_branch)
+
+    # Save to file
+    output_file = "pr_content.json"
+    with open(output_file, 'w') as f:
+        json.dump(pr_content, f, indent=2)
+
+    print(f"\\n💾 PR content saved to: {output_file}")
+'''
+
+                    // Run the collection script
+                    sh """
+                        cd ${VALIDATION_DIR}
+                        chmod +x collect_pr_content.py
+                        python3 collect_pr_content.py "${BASE_BRANCH}"
+                    """
+
+                    // Verify the file was created
+                    def prContentExists = fileExists("${VALIDATION_DIR}/pr_content.json")
+                    if (!prContentExists) {
+                        error("❌ Failed to collect PR content")
+                    }
+
+                    echo "✅ PR content collected successfully"
+                }
+            }
+        }
+        stage('Prepare for External Validation') {
+            steps {
+                script {
+                    echo "🔧 Preparing code for external repository validation..."
+                    echo "   Removing internal CI/CD files that should not be in public repo..."
+                    
+                    sh '''
+                        #!/bin/bash
+                        set -e
+                        
+                        # Store current branch name
+                        CURRENT_BRANCH=$(git branch --show-current)
+                        echo "📍 Current branch: $CURRENT_BRANCH"
+                        
+                        # Delete temporary branch if it already exists
+                        if git branch | grep -q "external-validation-temp"; then
+                            echo "🧹 Cleaning up existing external-validation-temp branch..."
+                            # Make sure we're not on the temp branch before deleting it
+                            if [ "$CURRENT_BRANCH" = "external-validation-temp" ]; then
+                                git checkout "$CURRENT_BRANCH" 2>/dev/null || git checkout main
+                            fi
+                            git branch -D external-validation-temp 2>/dev/null || true
+                            echo "✅ Existing temp branch deleted"
+                        fi
+                        
+                        # Create temporary branch for external validation
+                        echo "🌿 Creating external-validation-temp branch..."
+                        git checkout -b external-validation-temp
+                        
+                        # Remove Jenkinsfile-PublicRepo (internal CI/CD file)
+                        echo "🗑️  Removing Jenkinsfile-PublicRepo from validation..."
+                        if [ -f "Jenkinsfile-PublicRepo" ]; then
+                            git rm Jenkinsfile-PublicRepo
+                            git commit -m "Remove internal Jenkins pipeline configuration for public release"
+                            echo "✅ Jenkinsfile-PublicRepo removed successfully"
+                        else
+                            echo "ℹ️  Jenkinsfile-PublicRepo not found, skipping removal"
+                        fi
+                        
+                        echo "✅ Code prepared for external repository validation"
+                    '''
+                }
+            }
+        }
+
+
+        stage('Bob Validation') {
+            when {
+                expression { !params.SKIP_VALIDATION }
+            }
+            steps {
+                script {
+                    echo "🤖 Running Bob Shell validation for public repository submission..."
+
+                    // Create enhanced validation script for public repos
+                    writeFile file: "${VALIDATION_DIR}/validate_with_bob.py", text: '''#!/usr/bin/env python3
+import json
+import subprocess
+import sys
+import os
+
+def validate_with_bob(pr_content_file):
+    """Validate PR content using Bob Shell for public repo submission"""
+
+    # Read PR content
+    with open(pr_content_file, 'r') as f:
+        pr_content = json.load(f)
+
+    # Enhanced validation prompt for public repos
+    prompt = f"""You are validating content from an IBM contributor that will be submitted to a PUBLIC external repository.
+
+This is CRITICAL because:
+1. The content will be publicly visible
+2. It represents IBM in the open source community
+3. Any issues will damage IBM's reputation
+4. The external repository owners have strict standards
+
+IMPORTANT - PUBLICLY AVAILABLE TOOLS:
+The following tools are PUBLICLY AVAILABLE and should NOT be flagged as internal/confidential:
+- Bob Shell (https://www.npmjs.com/package/bobshell) - Public AI assistant tool
+- VS Code settings referencing Bob are acceptable
+- References to "bob", "bobshell", or "bob.reviewExclusions" are NOT confidential
+
+Please validate the following PR content for:
+
+CRITICAL CHECKS:
+1. Offensive language or unprofessional comments
+2. IBM confidential information (internal URLs, project codenames, credentials)
+   - EXCLUDE: Bob Shell references (publicly available tool)
+3. Security vulnerabilities (exposed secrets, API keys, passwords, tokens)
+4. Compliance violations (export control, licensing issues)
+5. IBM-specific references that should be generic
+6. Internal IBM tools or processes mentioned
+   - EXCLUDE: Bob Shell (publicly available on npm)
+7. Unprofessional tone or language
+8. Internal/proprietary keywords not found in public internet searches
+   - EXCLUDE: "bob", "bobshell" (verify on npmjs.com before flagging)
+
+PR Content to Validate:
+- Title: {pr_content.get('pr_title', '')}
+- Body: {pr_content.get('pr_body', '')}
+- Author: {pr_content.get('author', {}).get('name', 'Unknown')} ({pr_content.get('author', {}).get('email', 'Unknown')})
+- IBM Contributor: {pr_content.get('author', {}).get('is_ibm', False)}
+- Target: {pr_content.get('metadata', {}).get('public_repo', 'Unknown')}
+- Commit Messages: {pr_content.get('commit_messages', '')}
+- Changed Files: {', '.join(pr_content.get('changed_files', [])[:10])}
+- Code Changes (first 2000 chars): {pr_content.get('code_changes', '')[:2000]}
+
+Existing Warnings:
+{chr(10).join('- ' + w for w in pr_content.get('warnings', []))}
+
+Internal Keywords Detected (not found in public internet):
+{chr(10).join('- ' + kw['keyword'] + ': ' + kw['reason'] for kw in pr_content.get('internal_keywords', [])[:10])}
+{('... and ' + str(len(pr_content.get('internal_keywords', [])) - 10) + ' more internal keywords') if len(pr_content.get('internal_keywords', [])) > 10 else ''}
+
+Please respond in JSON format with:
+{{
+  "approved": true/false,
+  "confidence": "HIGH/MEDIUM/LOW",
+  "issues": [
+    {{
+      "type": "issue_type",
+      "severity": "CRITICAL/HIGH/MEDIUM/LOW",
+      "location": "where the issue was found",
+      "message": "description of the issue",
+      "suggestion": "how to fix it",
+      "public_impact": "why this matters for public repo"
+    }}
+  ],
+  "recommendations": [
+    "additional recommendations for public submission"
+  ]
+}}
+
+Be EXTRA strict because this is going to a public repository."""
+
+    print("🤖 Calling Bob Shell for public repo validation...")
+
+    try:
+        # Get Bob Shell and Node.js paths from environment
+        bob_path = os.getenv('BOB_SHELL_PATH', 'bob')
+        node_path = os.getenv('NODE_PATH', 'node')
+        bob_js_path = os.getenv('BOB_JS_PATH', '')
+        bob_api_key = os.getenv('BOB_API_KEY', '').strip()
+
+        if not bob_api_key:
+            print("❌ ERROR: BOB_API_KEY environment variable is not set!")
+            return {
+                "approved": False,
+                "confidence": "LOW",
+                "error": "Bob Shell API key not configured in Jenkins"
+            }
+
+        # Bob Shell uses a secret store for API keys
+        # The BOBSHELL_API_KEY environment variable is the primary way to provide the key
+        bob_env = {
+            **os.environ,
+            'PATH': f"/opt/homebrew/bin:{os.environ.get('PATH', '')}",
+            'BOBSHELL_API_KEY': bob_api_key,
+            'API_KEY': bob_api_key,
+            'BOB_API_KEY': bob_api_key
+        }
+
+        # Execute Bob Shell with prompt via stdin
+        try:
+            cmd = f'{bob_path} --output-format json --chat-mode code'
+
+            result = subprocess.run(
+                cmd,
+                input=prompt,
+                shell=True,
+                capture_output=True,
+                text=True,
+                timeout=120,
+                env=bob_env
+            )
+
+            if result.returncode != 0 and 'node' in result.stderr.lower():
+                # If it failed due to node not found, try Method 2
+                raise FileNotFoundError("Node.js not found, trying explicit node execution")
+
+        except (FileNotFoundError, PermissionError) as e:
+            # Method 2: Execute Bob.js directly with Node.js
+            print(f"Direct execution failed ({e}), trying with explicit node...")
+            if bob_js_path and os.path.exists(bob_js_path):
+                result = subprocess.run(
+                    [
+                        node_path,
+                        bob_js_path,
+                        '--output-format', 'json',
+                        '--chat-mode', 'code',
+                        prompt
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=120,
+                    env=bob_env
+                )
+            else:
+                # Fallback: try with just 'bob' in PATH
+                result = subprocess.run(
+                    [
+                        'bob',
+                        '--output-format', 'json',
+                        '--chat-mode', 'code',
+                        prompt
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=120,
+                    env=bob_env
+                )
+
+        if result.returncode == 0:
+            # Parse Bob Shell response
+            output = result.stdout
+
+            # Extract JSON from output markers
+            if '---output---' in output:
+                json_start = output.find('---output---') + len('---output---')
+                json_str = output[json_start:].strip()
+            else:
+                json_str = output.strip()
+
+            # Try to parse JSON - handle extra data after JSON
+            import re
+            try:
+                # First, try to extract just the JSON object
+                json_match = re.search(r'\\{(?:[^{}]|\\{[^{}]*\\})*\\}', json_str, re.DOTALL)
+                if json_match:
+                    json_str = json_match.group()
+
+                # Parse JSON
+                bob_response = json.loads(json_str)
+
+                # Add metadata
+                bob_response['validation_type'] = 'public_repo'
+                bob_response['target_repo'] = pr_content.get('metadata', {}).get('public_repo', 'Unknown')
+
+                return bob_response
+
+            except (json.JSONDecodeError, AttributeError) as e:
+                # Silently try alternative parsing methods
+                # Try to find JSON in the output using more aggressive regex
+                json_patterns = [
+                    r'\\{[\\s\\S]*?\\}(?=\\s*$)',  # JSON at end
+                    r'\\{[\\s\\S]*?\\}(?=\\s*---)',  # JSON before markers
+                    r'\\{[\\s\\S]*?\\}'  # Any JSON
+                ]
+
+                for pattern in json_patterns:
+                    try:
+                        match = re.search(pattern, output)
+                        if match:
+                            bob_response = json.loads(match.group())
+                            bob_response['validation_type'] = 'public_repo'
+                            bob_response['target_repo'] = pr_content.get('metadata', {}).get('public_repo', 'Unknown')
+                            return bob_response
+                    except:
+                        continue
+
+                # If all parsing fails, return error
+                return {
+                    "approved": False,
+                    "confidence": "LOW",
+                    "error": "Failed to parse Bob Shell response",
+                    "raw_output": result.stdout[:500]  # First 500 chars only
+                }
+        else:
+            return {
+                "approved": False,
+                "confidence": "LOW",
+                "error": f"Bob Shell exited with code {result.returncode}",
+                "stderr": result.stderr if result.stderr else "No error output"
+            }
+
+    except subprocess.TimeoutExpired:
+        print("❌ Bob Shell timeout")
+        return {
+            "approved": False,
+            "confidence": "LOW",
+            "error": "Timeout waiting for Bob response (120s)"
+        }
+
+    except FileNotFoundError:
+        return {
+            "approved": False,
+            "confidence": "LOW",
+            "error": "Bob Shell executable not found"
+        }
+
+    except Exception as e:
+        return {
+            "approved": False,
+            "confidence": "LOW",
+            "error": str(e)
+        }
+
+def format_validation_result(result, pr_content=None):
+    """Format validation result for human-readable output"""
+    output = []
+    output.append("\\n" + "="*70)
+    output.append("🤖 BOB VALIDATION RESULT - PUBLIC REPOSITORY SUBMISSION")
+    output.append("="*70)
+
+    # Status
+    approved = result.get("approved", False)
+    confidence = result.get("confidence", "UNKNOWN")
+    status_icon = "✅" if approved else "❌"
+
+    output.append(f"\\n{status_icon} STATUS: {'APPROVED' if approved else 'REJECTED'}")
+    output.append(f"📊 CONFIDENCE: {confidence}")
+    output.append(f"🎯 TARGET: {result.get('target_repo', 'Unknown')}")
+
+    # Internal Keywords Warning (if available from pr_content)
+    if pr_content:
+        internal_keywords = pr_content.get("internal_keywords", [])
+        if internal_keywords:
+            output.append(f"\\n🔍 INTERNAL KEYWORDS DETECTED: {len(internal_keywords)}")
+            output.append("-" * 70)
+            output.append("   The following keywords were not found in public internet searches,")
+            output.append("   suggesting they may be internal/proprietary terms:")
+            for kw in internal_keywords[:10]:  # Show first 10
+                output.append(f"   • {kw['keyword']}")
+            if len(internal_keywords) > 10:
+                output.append(f"   ... and {len(internal_keywords) - 10} more")
+            output.append("   ⚠️  Review these terms to ensure they are appropriate for public repos")
+
+    # Issues
+    issues = result.get("issues", [])
+    if issues:
+        output.append(f"\\n⚠️  ISSUES FOUND: {len(issues)}")
+        output.append("-" * 70)
+        for i, issue in enumerate(issues, 1):
+            output.append(f"\\n{i}. {issue.get('type', 'Unknown').upper().replace('_', ' ')}")
+            output.append(f"   Severity: {issue.get('severity', 'UNKNOWN')}")
+            output.append(f"   Location: {issue.get('location', 'Not specified')}")
+            output.append(f"   Message: {issue.get('message', 'No message')}")
+            if issue.get('suggestion'):
+                output.append(f"   💡 Suggestion: {issue.get('suggestion')}")
+            if issue.get('public_impact'):
+                output.append(f"   🌐 Public Impact: {issue.get('public_impact')}")
+    else:
+        output.append("\\n✅ NO ISSUES FOUND")
+
+    # Recommendations
+    recommendations = result.get("recommendations", [])
+    if recommendations:
+        output.append(f"\\n💡 RECOMMENDATIONS:")
+        output.append("-" * 70)
+        for i, rec in enumerate(recommendations, 1):
+            output.append(f"{i}. {rec}")
+
+    # Error handling
+    if result.get("error"):
+        output.append(f"\\n❌ ERROR: {result.get('error')}")
+
+    output.append("\\n" + "="*70)
+
+    return "\\n".join(output)
+
+if __name__ == "__main__":
+    pr_content_file = sys.argv[1] if len(sys.argv) > 1 else "pr_content.json"
+
+    # Load PR content for internal keywords display
+    with open(pr_content_file, 'r') as f:
+        pr_content = json.load(f)
+
+    print(f"\\n🔍 Validating PR content for public repository submission...")
+
+    result = validate_with_bob(pr_content_file)
+
+    # Save result
+    with open("bob_validation_result.json", 'w') as f:
+        json.dump(result, f, indent=2)
+
+    # Display formatted result with pr_content for internal keywords
+    print(format_validation_result(result, pr_content))
+
+    # Exit with appropriate code
+    sys.exit(0 if result.get("approved", False) else 1)
+'''
+
+                    // Run Bob validation with environment variables using withCredentials
+                    def validationResult
+                    withCredentials([string(credentialsId: 'bob-api-key', variable: 'BOB_API_KEY_SECRET')]) {
+                        validationResult = sh(
+                            script: """
+                                set +x
+                                cd ${VALIDATION_DIR}
+                                chmod +x validate_with_bob.py
+
+                                # Export environment variables for Bob Shell
+                                export BOBSHELL_API_KEY="\${BOB_API_KEY_SECRET}"
+                                export API_KEY="\${BOB_API_KEY_SECRET}"
+                                export BOB_API_KEY="\${BOB_API_KEY_SECRET}"
+                                export BOB_SHELL_PATH="${BOB_SHELL_PATH}"
+                                export BOB_JS_PATH="${BOB_JS_PATH}"
+                                export NODE_PATH="${NODE_PATH}"
+                                export PATH="${PATH}"
+
+                                # Run validation
+                                python3 validate_with_bob.py pr_content.json
+                            """,
+                            returnStatus: true
+                        )
+                    }
+
+                    // Read validation results using native Groovy JSON parsing
+                    def resultsFile = "${VALIDATION_DIR}/bob_validation_result.json"
+                    if (fileExists(resultsFile)) {
+                        // Read file content and parse JSON manually
+                        def jsonContent = readFile(resultsFile)
+                        def jsonSlurper = new groovy.json.JsonSlurper()
+                        def results = jsonSlurper.parseText(jsonContent)
+
+                        // Store results in environment
+                        env.BOB_APPROVED = results.approved.toString()
+                        env.BOB_CONFIDENCE = results.confidence ?: 'UNKNOWN'
+                        env.BOB_VALIDATION_RESULT = resultsFile
+
+                        if (validationResult != 0 || !results.approved) {
+                            currentBuild.result = 'FAILURE'
+                            error("❌ Bob validation failed for public repository submission. See validation results for details.")
+                        } else {
+                            echo "✅ Bob validation passed! Content is safe for public repository."
+                            echo "   Confidence: ${env.BOB_CONFIDENCE}"
+                        }
+                    } else {
+                        error("❌ Validation result file not found")
+                    }
+                }
+            }
+        }
+        stage('Cleanup External Validation') {
+            steps {
+                script {
+                    echo "🧹 Cleaning up external validation temporary branch..."
+                    
+                    sh '''
+                        #!/bin/bash
+                        set +e  # Don't exit on error during cleanup
+                        
+                        # Get current branch (should be external-validation-temp)
+                        CURRENT_BRANCH=$(git branch --show-current 2>/dev/null || echo "")
+                        echo "📍 Current branch: ${CURRENT_BRANCH:-detached HEAD}"
+                        
+                        # Determine the original branch to return to
+                        # Priority: CHANGE_BRANCH (PR) > GIT_BRANCH > BRANCH_NAME > main
+                        ORIGINAL_BRANCH="${CHANGE_BRANCH:-${GIT_BRANCH:-${BRANCH_NAME:-main}}}"
+                        
+                        # Remove 'origin/' prefix if present
+                        ORIGINAL_BRANCH=$(echo "$ORIGINAL_BRANCH" | sed 's|^origin/||')
+                        
+                        echo "🔙 Attempting to return to original branch: $ORIGINAL_BRANCH"
+                        
+                        # Try multiple strategies to return to original branch
+                        if [ "$CURRENT_BRANCH" = "external-validation-temp" ] || [ -z "$CURRENT_BRANCH" ]; then
+                            # Strategy 1: Try to checkout the original branch
+                            if git checkout "$ORIGINAL_BRANCH" 2>/dev/null; then
+                                echo "✅ Returned to $ORIGINAL_BRANCH"
+                            # Strategy 2: Try to checkout main
+                            elif git checkout main 2>/dev/null; then
+                                echo "✅ Returned to main"
+                            # Strategy 3: Try to checkout any branch that exists
+                            elif git checkout $(git branch | grep -v "external-validation-temp" | head -1 | xargs) 2>/dev/null; then
+                                echo "✅ Returned to available branch"
+                            else
+                                echo "⚠️  Could not checkout branch, continuing anyway..."
+                            fi
+                            
+                            # Delete temporary branch if it exists
+                            if git branch | grep -q "external-validation-temp"; then
+                                echo "🗑️  Deleting temporary branch: external-validation-temp"
+                                git branch -D external-validation-temp 2>/dev/null || echo "⚠️  Could not delete temp branch"
+                            fi
+                            
+                            echo "✅ Cleanup completed"
+                        else
+                            echo "ℹ️  Not on external-validation-temp branch, skipping cleanup"
+                        fi
+                        
+                        exit 0  # Always exit successfully from cleanup
+                    '''
+                }
+            }
+        }
+
+
+//         stage('Post Results to IBM Fork PR') {
+//             when {
+//                 expression { env.CHANGE_ID != null }
+//             }
+//             steps {
+//                 script {
+//                     echo "📝 Posting validation results to IBM fork PR..."
+
+//                     def results = readJSON file: "${VALIDATION_DIR}/bob_validation_result.json"
+//                     def comment = generateGitHubCommentForPublicRepo(results)
+
+//                     // Post comment to IBM fork PR
+//                     sh """
+//                         curl -X POST \
+//                             -H "Authorization: token ${GITHUB_TOKEN}" \
+//                             -H "Content-Type: application/json" \
+//                             -H "Accept: application/vnd.github.v3+json" \
+//                             -d '{"body": ${groovy.json.JsonOutput.toJson(comment)}}' \
+//                             "https://api.github.com/repos/${IBM_FORK_REPO}/issues/${env.CHANGE_ID}/comments"
+//                     """
+
+//                     echo "✅ Results posted to IBM fork PR #${env.CHANGE_ID}"
+//                 }
+//             }
+//         }
+        // 
+//         stage('Create PR to Public Repo') {
+//             when {
+//                 allOf {
+//                     expression { env.BOB_APPROVED == 'true' }
+//                     expression { params.AUTO_CREATE_PR }
+//                 }
+//             }
+//             steps {
+//                 script {
+//                     echo "🚀 Creating PR to public repository..."
+
+//                     def prContent = readJSON file: "${VALIDATION_DIR}/pr_content.json"
+
+//                     // Create PR to public repo
+//                     def prBody = """${prContent.pr_body}
+
+// ---
+
+// **IBM Contributor Information:**
+// - Validated by: Bob AI Content Validation System
+// - IBM Fork: ${IBM_FORK_REPO}
+// - Validation Build: [Jenkins #${env.BUILD_NUMBER}](${env.BUILD_URL})
+
+// This contribution has been validated for:
+// ✅ Content appropriateness
+// ✅ No confidential information
+// ✅ Security best practices
+// ✅ Compliance requirements
+// """
+
+//                     def prData = [
+//                         title: prContent.pr_title,
+//                         body: prBody,
+//                         head: "${IBM_FORK_REPO.split('/')[0]}:${GIT_BRANCH}",
+//                         base: BASE_BRANCH
+//                     ]
+
+//                     writeJSON file: "${VALIDATION_DIR}/pr_data.json", json: prData
+
+//                     def createPrResult = sh(
+//                         script: """
+//                             curl -X POST \
+//                                 -H "Authorization: token ${GITHUB_TOKEN}" \
+//                                 -H "Content-Type: application/json" \
+//                                 -H "Accept: application/vnd.github.v3+json" \
+//                                 -d @${VALIDATION_DIR}/pr_data.json \
+//                                 "https://api.github.com/repos/${PUBLIC_REPO}/pulls" \
+//                                 > ${VALIDATION_DIR}/public_pr_response.json
+
+//                             cat ${VALIDATION_DIR}/public_pr_response.json
+//                         """,
+//                         returnStdout: true
+//                     )
+
+//                     def prResponse = readJSON file: "${VALIDATION_DIR}/public_pr_response.json"
+
+//                     if (prResponse.number) {
+//                         env.PUBLIC_PR_NUMBER = prResponse.number.toString()
+//                         env.PUBLIC_PR_URL = prResponse.html_url
+
+//                         echo "✅ PR created successfully!"
+//                         echo "   PR #${env.PUBLIC_PR_NUMBER}: ${env.PUBLIC_PR_URL}"
+
+//                         // Post link back to IBM fork PR
+//                         if (env.CHANGE_ID) {
+//                             sh """
+//                                 curl -X POST \
+//                                     -H "Authorization: token ${GITHUB_TOKEN}" \
+//                                     -H "Content-Type: application/json" \
+//                                     -d '{"body": "✅ PR created to public repository: ${env.PUBLIC_PR_URL}"}' \
+//                                     "https://api.github.com/repos/${IBM_FORK_REPO}/issues/${env.CHANGE_ID}/comments"
+//                             """
+//                         }
+//                     } else {
+//                         echo "⚠️  Failed to create PR to public repo"
+//                         echo "   Response: ${createPrResult}"
+//                     }
+//                 }
+//             }
+//         }
+
+//         stage('Generate Report') {
+//             steps {
+//                 script {
+//                     echo "📊 Generating validation report..."
+
+//                     def results = readJSON file: "${VALIDATION_DIR}/bob_validation_result.json"
+//                     def prContent = readJSON file: "${VALIDATION_DIR}/pr_content.json"
+//                     def htmlReport = generateHTMLReportForPublicRepo(results, prContent)
+
+//                     writeFile file: "${VALIDATION_DIR}/validation_report.html", text: htmlReport
+
+//                     echo "✅ Report generated"
+//                 }
+//             }
+//         }
+    }
+
+    post {
+        always {
+            script {
+                echo "🧹 Cleaning up and archiving artifacts..."
+
+                archiveArtifacts artifacts: 'bob-validation/**/*', allowEmptyArchive: true
+
+                // publishHTML([
+                //     reportDir: 'bob-validation',
+                //     reportFiles: 'validation_report.html',
+                //     reportName: 'Bob Validation Report (Public Repo)',
+                //     keepAll: true,
+                //     alwaysLinkToLastBuild: true
+                // ])
+                
+                // Ensure temporary branch is cleaned up even if pipeline fails
+                echo "🧹 Final cleanup: Ensuring external-validation-temp branch is removed..."
+                try {
+                    sh '''
+                        #!/bin/bash
+                        set +e  # Don't exit on error in cleanup
+                        
+                        CURRENT_BRANCH=$(git branch --show-current 2>/dev/null || echo "unknown")
+                        
+                        if [ "$CURRENT_BRANCH" = "external-validation-temp" ]; then
+                            echo "⚠️  Still on external-validation-temp branch, switching back..."
+                            ORIGINAL_BRANCH="${CHANGE_BRANCH:-${GIT_BRANCH:-${BRANCH_NAME:-main}}}"
+                            ORIGINAL_BRANCH=$(echo "$ORIGINAL_BRANCH" | sed 's|^origin/||')
+                            git checkout "$ORIGINAL_BRANCH" 2>/dev/null || git checkout main 2>/dev/null || true
+                        fi
+                        
+                        # Delete temporary branch if it exists
+                        if git branch | grep -q "external-validation-temp"; then
+                            echo "🗑️  Deleting external-validation-temp branch..."
+                            git branch -D external-validation-temp 2>/dev/null || true
+                            echo "✅ Temporary branch cleaned up"
+                        fi
+                        
+                        exit 0  # Always exit successfully in cleanup
+                    '''
+                } catch (Exception e) {
+                    echo "⚠️  Cleanup encountered an error (non-critical): ${e.message}"
+                }
+            }
+        }
+
+        success {
+            script {
+                echo "✅ Pipeline completed successfully!"
+
+                if (env.CHANGE_ID) {
+                    sh """
+                        curl -X POST \
+                            -H "Authorization: token ${GITHUB_TOKEN}" \
+                            -H "Content-Type: application/json" \
+                            -d '{"state": "success", "context": "Bob Validation (Public Repo)", "description": "Content validated for public submission"}' \
+                            "https://api.github.com/repos/${IBM_FORK_REPO}/statuses/${env.GIT_COMMIT}"
+                    """
+                }
+
+                if (env.PUBLIC_PR_URL) {
+                    echo "🎉 Public PR created: ${env.PUBLIC_PR_URL}"
+                }
+            }
+        }
+
+        failure {
+            script {
+                echo "❌ Pipeline failed!"
+
+                if (env.CHANGE_ID) {
+                    sh """
+                        curl -X POST \
+                            -H "Authorization: token ${GITHUB_TOKEN}" \
+                            -H "Content-Type: application/json" \
+                            -d '{"state": "failure", "context": "Bob Validation (Public Repo)", "description": "Content validation failed - not safe for public submission"}' \
+                            "https://api.github.com/repos/${IBM_FORK_REPO}/statuses/${env.GIT_COMMIT}"
+                    """
+                }
+
+                // Send email notification (optional - will skip if email not configured)
+                try {
+                    emailext(
+                        subject: "⚠️  Bob Validation Failed for Public Repo: ${env.JOB_NAME} #${env.BUILD_NUMBER}",
+                        body: """
+                            Bob content validation has FAILED for public repository submission.
+
+                            This is CRITICAL because the content was intended for a public repository.
+
+                            Job: ${env.JOB_NAME}
+                            Build: ${env.BUILD_NUMBER}
+                            IBM Fork PR: #${env.CHANGE_ID ?: 'N/A'}
+                            Target Public Repo: ${PUBLIC_REPO}
+                            Branch: ${GIT_BRANCH}
+
+                            ⚠️  DO NOT submit this content to the public repository until issues are resolved.
+
+                            Review the validation results:
+                            ${env.BUILD_URL}console
+
+                            Contact DevOps team if you need assistance.
+                        """,
+                        to: "${env.CHANGE_AUTHOR_EMAIL ?: 'karthikeyan.balakrishnan1@ibm.com'}",
+                        attachLog: true
+                    )
+                    echo "✅ Email notification sent"
+                } catch (Exception e) {
+                    echo "⚠️  Email notification skipped (email not configured): ${e.message}"
+                    echo "   Configure Jenkins email to receive notifications"
+                }
+            }
+        }
+    }
+}
+
+// Helper function for public repo GitHub comment
+def generateGitHubCommentForPublicRepo(results) {
+    if (results.approved) {
+        return """## ✅ Bob AI Content Validation: APPROVED for Public Repository
+
+All content has been validated and is **SAFE for public repository submission**.
+
+**Validation Confidence:** ${results.confidence ?: 'HIGH'}
+
+**Target Repository:** ${PUBLIC_REPO}
+
+**Validation Details:**
+- ✓ Offensive language: Clean
+- ✓ IBM confidential information: None detected
+- ✓ Security vulnerabilities: None found
+- ✓ Compliance: Compliant
+- ✓ Professional standards: Met
+
+${results.recommendations && results.recommendations.size() > 0 ? "**Recommendations:**\n" + results.recommendations.collect { "- ${it}" }.join('\n') : ""}
+
+**Next Steps:**
+${params.AUTO_CREATE_PR ? "- ✅ PR will be automatically created to public repository" : "- Manual PR creation required to public repository"}
+- Review the PR in the public repository
+- Respond to any feedback from public repo maintainers
+
+**Build Information:**
+- Jenkins Build: [#${env.BUILD_NUMBER}](${env.BUILD_URL})
+- Validation Report: [View Report](${env.BUILD_URL}Bob_20Validation_20Report_20_28Public_20Repo_29/)
+
+---
+*Automated validation by Bob AI for public repository submission*"""
+    } else {
+        def issuesText = ""
+        if (results.issues && results.issues.size() > 0) {
+            issuesText = results.issues.collect { issue ->
+                """### ${issue.severity ?: 'MEDIUM'}: ${issue.type ?: 'Unknown'}
+
+**Location:** ${issue.location ?: 'N/A'}
+**Message:** ${issue.message ?: 'N/A'}
+${issue.suggestion ? "**Suggestion:** ${issue.suggestion}" : ""}
+${issue.public_impact ? "**Public Impact:** ${issue.public_impact}" : ""}"""
+            }.join('\n\n---\n\n')
+        } else if (results.error) {
+            issuesText = "**Error:** ${results.error}"
+        }
+
+        return """## ❌ Bob AI Content Validation: REJECTED for Public Repository
+
+⚠️  **CRITICAL: This content is NOT safe for public repository submission.**
+
+**Validation Confidence:** ${results.confidence ?: 'HIGH'}
+
+**Target Repository:** ${PUBLIC_REPO}
+
+**Issues Detected:**
+
+${issuesText}
+
+**⚠️  IMPORTANT:**
+- DO NOT create a PR to the public repository until these issues are resolved
+- Fix all issues in the IBM fork first
+- Re-run validation after fixes
+- Only submit to public repo after validation passes
+
+**Build Information:**
+- Jenkins Build: [#${env.BUILD_NUMBER}](${env.BUILD_URL})
+- Validation Report: [View Report](${env.BUILD_URL}Bob_20Validation_20Report_20_28Public_20Repo_29/)
+- Console Output: [View Logs](${env.BUILD_URL}console)
+
+**Need Help?**
+- Contact DevOps team
+- Review IBM's open source contribution guidelines
+- Check the validation report for detailed feedback
+
+---
+*Automated validation by Bob AI for public repository submission*"""
+    }
+}
+
+// Helper function for HTML report
+def generateHTMLReportForPublicRepo(results, prContent) {
+    def status = results.approved ? "APPROVED" : "REJECTED"
+    def statusColor = results.approved ? "#28a745" : "#dc3545"
+    def statusIcon = results.approved ? "✅" : "❌"
+
+    def issuesHTML = ""
+    if (results.issues && results.issues.size() > 0) {
+        issuesHTML = results.issues.collect { issue ->
+            def severityColor = issue.severity == "CRITICAL" ? "#dc3545" : (issue.severity == "HIGH" ? "#dc3545" : (issue.severity == "MEDIUM" ? "#ffc107" : "#17a2b8"))
+            """
+            <div class="issue" style="border-left: 4px solid ${severityColor}; padding: 15px; margin: 10px 0; background: #f8f9fa;">
+                <h4 style="margin: 0 0 10px 0; color: ${severityColor};">${issue.severity ?: 'MEDIUM'}: ${issue.type ?: 'Unknown'}</h4>
+                <p><strong>Location:</strong> ${issue.location ?: 'N/A'}</p>
+                <p><strong>Message:</strong> ${issue.message ?: 'N/A'}</p>
+                ${issue.suggestion ? "<p><strong>Suggestion:</strong> ${issue.suggestion}</p>" : ""}
+                ${issue.public_impact ? "<p><strong>Public Impact:</strong> ${issue.public_impact}</p>" : ""}
+            </div>
+            """
+        }.join('\n')
+    }
+
+    return """<!DOCTYPE html>
+<html>
+<head>
+    <title>Bob Validation Report - Public Repository</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; background: #f5f5f5; }
+        .container { max-width: 1200px; margin: 0 auto; background: white; padding: 30px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        .header { text-align: center; margin-bottom: 30px; }
+        .status { font-size: 48px; margin: 20px 0; }
+        .status-text { font-size: 32px; font-weight: bold; color: ${statusColor}; }
+        .warning { background: #fff3cd; border-left: 4px solid #ffc107; padding: 15px; margin: 20px 0; }
+        .info { background: #e9ecef; padding: 15px; border-radius: 4px; margin: 20px 0; }
+        .info-item { margin: 5px 0; }
+        .issues { margin-top: 30px; }
+        .footer { text-align: center; margin-top: 30px; color: #6c757d; font-size: 14px; }
+        .public-repo-badge { background: #007bff; color: white; padding: 5px 10px; border-radius: 4px; display: inline-block; margin: 10px 0; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>Bob AI Content Validation Report</h1>
+            <div class="public-repo-badge">PUBLIC REPOSITORY SUBMISSION</div>
+            <div class="status">${statusIcon}</div>
+            <div class="status-text">${status}</div>
+        </div>
+
+        ${!results.approved ? '<div class="warning"><strong>⚠️  WARNING:</strong> This content is NOT approved for public repository submission. Do not create a PR to the public repository until all issues are resolved.</div>' : ''}
+
+        <div class="info">
+            <h3>Build Information</h3>
+            <div class="info-item"><strong>Job:</strong> ${env.JOB_NAME}</div>
+            <div class="info-item"><strong>Build:</strong> #${env.BUILD_NUMBER}</div>
+            <div class="info-item"><strong>IBM Fork:</strong> ${IBM_FORK_REPO}</div>
+            <div class="info-item"><strong>Public Repository:</strong> ${PUBLIC_REPO}</div>
+            <div class="info-item"><strong>Branch:</strong> ${env.GIT_BRANCH}</div>
+            <div class="info-item"><strong>PR:</strong> #${env.CHANGE_ID ?: 'N/A'}</div>
+            <div class="info-item"><strong>Author:</strong> ${prContent.author?.name ?: 'N/A'} (${prContent.author?.email ?: 'N/A'})</div>
+            <div class="info-item"><strong>IBM Contributor:</strong> ${prContent.author?.is_ibm ? 'Yes' : 'No'}</div>
+            <div class="info-item"><strong>Validation Confidence:</strong> ${results.confidence ?: 'N/A'}</div>
+            <div class="info-item"><strong>Timestamp:</strong> ${new Date()}</div>
+        </div>
+
+        ${issuesHTML ? "<div class='issues'><h3>Issues Detected</h3>${issuesHTML}</div>" : "<p style='text-align: center; color: #28a745; font-size: 18px;'>✅ No issues detected. Content is safe for public repository submission!</p>"}
+
+        ${env.PUBLIC_PR_URL ? "<div class='info'><h3>Public PR Created</h3><p>PR URL: <a href='${env.PUBLIC_PR_URL}'>${env.PUBLIC_PR_URL}</a></p></div>" : ""}
+
+        <div class="footer">
+            <p>Automated validation by Bob AI for public repository submission | Jenkins Build #${env.BUILD_NUMBER}</p>
+        </div>
+    </div>
+</body>
+</html>"""
+}
